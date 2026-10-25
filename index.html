@@ -161,35 +161,88 @@ const DEMO = new URLSearchParams(location.search).has("demo");
 
 // ---------- 保存 ----------
 // 記録の形:{ id, start, end, samples: [[時刻(ミリ秒), 平均の音の大きさ(dB), 物音のあった秒数], ...] }
-function loadSessions() {
-  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
-}
-let sessions = DEMO ? makeDemo() : loadSessions();
+// 記録はブラウザの大きな保存場所(IndexedDB)に1晩1件で入れる。
+// 以前の版は localStorage(上限約5MB)に入れていたので、最初に開いたときに引っ越す。
+// 記録中の途中保存だけは、小さくてすぐ書ける localStorage を使う。
+const DB_NAME = "sleeplog", STORE = "sessions";
+const SAVE_FAILED = "記録を保存できませんでした。\n\n今回の記録は消さずに残してあり、次に開いたときにもう一度保存します。何度も続く場合は、「履歴」→「記録をファイルに書き出す」でバックアップを取ってください。";
+let db = null;
+let sessions = [];
 
-function saveSessions() {
-  if (DEMO) return;
-  sessions.sort((a, b) => b.start - a.start);
-  localStorage.setItem(KEY, JSON.stringify(sessions));
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-function addSession(s) {
+function readAll() {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE).objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 書き込みと削除をまとめて行う。全部うまくいったときだけ成功になる
+function writeDB(puts, deletes = []) {
+  if (DEMO) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    puts.forEach((s) => store.put(s));
+    deletes.forEach((id) => store.delete(id));
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+const sortSessions = () => sessions.sort((a, b) => b.start - a.start);
+
+async function initStorage() {
+  if (DEMO) {
+    sessions = makeDemo();
+    return;
+  }
+  db = await openDB();
+  const old = localStorage.getItem(KEY);
+  if (old) {
+    let list = [];
+    try { list = JSON.parse(old) || []; } catch {}
+    await writeDB(list);
+    localStorage.removeItem(KEY); // 引っ越しが終わってから消す
+  }
+  sessions = await readAll();
+  sortSessions();
+}
+
+async function addSession(s) {
+  await writeDB([s]);
   sessions = sessions.filter((x) => x.id !== s.id);
   sessions.push(s);
-  saveSessions();
+  sortSessions();
 }
 
-// 記録中にページが閉じてしまった夜の分を、履歴に戻す
-function recoverInProgress() {
+// 記録中にページが閉じてしまった夜(または保存に失敗した夜)の分を、履歴に戻す
+async function recoverInProgress() {
   const raw = localStorage.getItem(PROGRESS_KEY);
   if (!raw) return;
-  localStorage.removeItem(PROGRESS_KEY);
+  let s;
+  try { s = JSON.parse(raw); } catch { localStorage.removeItem(PROGRESS_KEY); return; }
+  if (!s || !Array.isArray(s.samples) || !s.samples.length) {
+    localStorage.removeItem(PROGRESS_KEY);
+    return;
+  }
   try {
-    const s = JSON.parse(raw);
-    if (s.samples.length) {
-      addSession(s);
-      toast("前回の記録が途中で止まっていたので、そこまでを履歴に保存しました。");
-    }
-  } catch {}
+    await addSession(s);
+  } catch {
+    alert(SAVE_FAILED);
+    return;
+  }
+  localStorage.removeItem(PROGRESS_KEY);
+  toast("前回の記録が保存されていなかったので、履歴に保存しました。");
 }
 
 // ---------- 書式 ----------
@@ -343,9 +396,12 @@ function showDetail(id) {
   $("#backBtn").addEventListener("click", () => show("historyView"));
   $("#deleteBtn").addEventListener("click", () => {
     if (!confirm(nightTitle(s.start) + "の記録を削除します。元に戻せません。よろしいですか？")) return;
-    sessions = sessions.filter((x) => x.id !== s.id);
-    saveSessions();
-    show("historyView");
+    writeDB([], [s.id])
+      .then(() => {
+        sessions = sessions.filter((x) => x.id !== s.id);
+        show("historyView");
+      })
+      .catch(() => alert("削除できませんでした。もう一度お試しください。"));
   });
   show("detailView");
 }
@@ -441,9 +497,12 @@ function pushMinute() {
   const level = m.levels.reduce((a, b) => a + b, 0) / m.levels.length;
   rec.samples.push([m.start, Math.round(level * 10) / 10, m.events]);
   // ページが閉じても残るよう、1分ごとに途中保存
-  if (!DEMO) {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples }));
-  }
+  saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples });
+}
+
+function saveProgress(s) {
+  if (DEMO) return;
+  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(s)); } catch {}
 }
 
 function stopRecording() {
@@ -455,15 +514,21 @@ function stopRecording() {
   releaseScreen();
   rec.on = false;
   $("#night").classList.remove("on");
-  localStorage.removeItem(PROGRESS_KEY);
 
   if (!rec.samples.length) {
+    localStorage.removeItem(PROGRESS_KEY);
     alert("記録が1分未満だったため、保存しませんでした。");
     return;
   }
   const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples };
-  addSession(s);
-  showDetail(s.id);
+  // 保存に成功するまでは途中保存を消さない(失敗しても、次に開いたときに戻せる)
+  saveProgress(s);
+  addSession(s)
+    .then(() => {
+      localStorage.removeItem(PROGRESS_KEY);
+      showDetail(s.id);
+    })
+    .catch(() => alert(SAVE_FAILED));
 }
 
 function drawClock() {
@@ -563,18 +628,26 @@ $("#importFile").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   e.target.value = "";
   if (!f) return;
+  let added;
   try {
     const data = JSON.parse(await f.text());
     if (data.app !== "sleeplog" || !Array.isArray(data.sessions)) throw new Error();
     const known = new Set(sessions.map((s) => s.id));
-    const added = data.sessions.filter((s) => !known.has(s.id) && Array.isArray(s.samples));
-    sessions.push(...added);
-    saveSessions();
-    renderList();
-    toast(added.length + "件の記録を戻しました。");
+    added = data.sessions.filter((s) => s && s.id && !known.has(s.id) && Array.isArray(s.samples));
   } catch {
     alert("このファイルは読み込めませんでした。「SleepLog」で書き出したファイルを選んでください。");
+    return;
   }
+  try {
+    await writeDB(added);
+  } catch {
+    alert("読み込んだ記録を保存できませんでした。もう一度お試しください。");
+    return;
+  }
+  sessions.push(...added);
+  sortSessions();
+  renderList();
+  toast(added.length + "件の記録を戻しました。");
 });
 
 // ---------- 見本データ(?demo を付けて開いたときだけ。保存はしない) ----------
@@ -598,7 +671,10 @@ function makeDemo() {
 }
 
 // ---------- 起動 ----------
-if (!DEMO) recoverInProgress();
+initStorage()
+  .then(() => (DEMO ? null : recoverInProgress()))
+  .catch(() => alert("記録の保存場所を開けませんでした。プライベートブラウズになっていないか確認してください。"))
+  .then(() => { if ($("#historyView").classList.contains("on")) renderList(); });
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 </script>
 </body>
