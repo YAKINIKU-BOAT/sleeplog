@@ -6,11 +6,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="睡眠きろく">
+<meta name="apple-mobile-web-app-title" content="SleepLog">
 <meta name="theme-color" content="#0b0d1a">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="manifest" href="manifest.json">
-<title>睡眠きろく</title>
+<title>SleepLog</title>
 <style>
   :root {
     --bg: #0b0d1a;
@@ -112,7 +112,7 @@
 <div id="toast"></div>
 
 <section id="recordView" class="view on">
-  <h1>睡眠きろく</h1>
+  <h1>SleepLog</h1>
   <div class="hero">
     <div class="moon">🌙</div>
     <p>寝る前に「おやすみ」を押してください</p>
@@ -545,7 +545,7 @@ $("#startBtn").addEventListener("click", () => {
 $("#exportBtn").addEventListener("click", async () => {
   if (!sessions.length) { alert("まだ記録がありません。"); return; }
   const d = new Date();
-  const name = `睡眠きろく_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
+  const name = `SleepLog_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
   const file = new File([JSON.stringify({ app: "sleeplog", version: 1, sessions })], name, { type: "application/json" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file] }); } catch {}
@@ -573,7 +573,7 @@ $("#importFile").addEventListener("change", async (e) => {
     renderList();
     toast(added.length + "件の記録を戻しました。");
   } catch {
-    alert("このファイルは読み込めませんでした。「睡眠きろく」で書き出したファイルを選んでください。");
+    alert("このファイルは読み込めませんでした。「SleepLog」で書き出したファイルを選んでください。");
   }
 });
 

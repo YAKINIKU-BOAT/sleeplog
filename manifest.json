@@ -1,6 +1,6 @@
 {
-  "name": "睡眠きろく",
-  "short_name": "睡眠きろく",
+  "name": "SleepLog",
+  "short_name": "SleepLog",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0b0d1a",
