@@ -121,6 +121,7 @@
     <li><span>🔌</span>充電しながら、枕元に置いてください</li>
     <li><span>📱</span>記録中は画面が真っ黒になります。画面を消したり、別のアプリに切り替えたりしないでください</li>
     <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
+    <li><span>💡</span>それでも画面が消えてしまうときは、「設定」→「画面表示と明るさ」→「自動ロック」を「なし」にしてください(朝に元に戻すのを忘れずに)</li>
   </ul>
   <button class="big-btn" id="startBtn">おやすみ(記録を始める)</button>
   <p class="note">音そのものは保存しません。残るのは1分ごとの「物音の大きさ」の数字だけで、このiPhoneの外には送られません。</p>
@@ -369,6 +370,7 @@ async function startRecording() {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
   } catch (e) {
+    awakeVideo.pause();
     alert("マイクが使えませんでした。\n\nマイクの使用を「許可」してください。許可のボタンが出ない場合は、「設定」アプリ →「アプリ」→「Safari」→「マイク」を確認してください。");
     return;
   }
@@ -471,23 +473,47 @@ function drawClock() {
   $("#elapsed").textContent = "記録中 " + duration(m);
 }
 
-// 画面が自動で消えないようにする
+// 画面が自動で消えないようにする。
+// 本来の方法(wakeLock)はiPhoneの環境によって効かないことがあるので、
+// 予備として「音の無い短い動画」を繰り返し再生し続ける(再生中は画面が消えない)
+const awakeVideo = document.createElement("video");
+awakeVideo.src = "keepawake.mp4";
+awakeVideo.setAttribute("playsinline", "");
+awakeVideo.addEventListener("timeupdate", () => {
+  if (awakeVideo.currentTime > 0.5) awakeVideo.currentTime = Math.random();
+});
+
+// ボタンを押した瞬間に呼ぶ(iPhoneは、タップした直後でないと再生を許可しない)
+function startAwakeVideo() {
+  awakeVideo.play().catch(() => {});
+}
+
 async function keepScreenOn() {
-  try { rec.wake = await navigator.wakeLock.request("screen"); } catch {}
+  if (!("wakeLock" in navigator) || rec.wake) return;
+  try {
+    rec.wake = await navigator.wakeLock.request("screen");
+    rec.wake.addEventListener("release", () => { rec.wake = null; });
+  } catch {}
 }
 function releaseScreen() {
   try { rec.wake && rec.wake.release(); } catch {}
   rec.wake = null;
+  awakeVideo.pause();
 }
 document.addEventListener("visibilitychange", () => {
   if (rec.on && document.visibilityState === "visible") {
     keepScreenOn();
+    startAwakeVideo();
     rec.ctx.resume().catch(() => {});
   }
 });
 
-// 真っ黒な画面をタップしたら、止まったマイクを再開する
-$("#night").addEventListener("click", () => { if (rec.on) rec.ctx.resume().catch(() => {}); });
+// 真っ黒な画面をタップしたら、止まったマイクや動画を再開する
+$("#night").addEventListener("click", () => {
+  if (!rec.on) return;
+  rec.ctx.resume().catch(() => {});
+  startAwakeVideo();
+});
 
 // 寝ぼけて止めないよう、長押し(1.5秒)で終了
 (function setupHold() {
@@ -510,7 +536,10 @@ $("#night").addEventListener("click", () => { if (rec.on) rec.ctx.resume().catch
   btn.addEventListener("contextmenu", (e) => e.preventDefault());
 })();
 
-$("#startBtn").addEventListener("click", startRecording);
+$("#startBtn").addEventListener("click", () => {
+  startAwakeVideo();
+  startRecording();
+});
 
 // ---------- バックアップ ----------
 $("#exportBtn").addEventListener("click", async () => {
