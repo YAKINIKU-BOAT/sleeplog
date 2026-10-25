@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="睡眠きろく">
+<meta name="theme-color" content="#0b0d1a">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<title>睡眠きろく</title>
+<style>
+  :root {
+    --bg: #0b0d1a;
+    --card: #161a2e;
+    --line: #262b47;
+    --text: #e8e9f3;
+    --sub: #8d91b0;
+    --deep: #5b5bd6;
+    --light: #9a6fd8;
+    --awake: #f0a04b;
+    --accent: #6c6cf0;
+    --danger: #e5675f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    padding: env(safe-area-inset-top) 16px calc(76px + env(safe-area-inset-bottom));
+    min-height: 100vh;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 28px; margin: 20px 0 16px; }
+  h2 { font-size: 15px; color: var(--sub); font-weight: 600; margin: 24px 0 8px; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+  .view { display: none; }
+  .view.on { display: block; }
+
+  /* 記録タブ */
+  .hero { text-align: center; padding: 40px 0 24px; }
+  .moon { font-size: 72px; line-height: 1; }
+  .hero p { font-weight: 600; margin: 20px 0 0; }
+  .tips { list-style: none; padding: 0; margin: 24px 0; color: var(--sub); font-size: 14px; }
+  .tips li { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+  .big-btn {
+    display: block; width: 100%; padding: 20px; border-radius: 16px;
+    background: var(--accent); font-size: 19px; font-weight: 700;
+  }
+  .note { color: var(--sub); font-size: 12px; line-height: 1.6; margin-top: 16px; }
+
+  /* 記録中の真っ黒な画面 */
+  #night {
+    position: fixed; inset: 0; background: #000; z-index: 10; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    padding: env(safe-area-inset-top) 24px env(safe-area-inset-bottom);
+  }
+  #night.on { display: flex; }
+  #night .clock { font-size: 64px; font-weight: 200; color: #3a3d55; font-variant-numeric: tabular-nums; }
+  #night .elapsed { color: #33364a; font-size: 15px; font-variant-numeric: tabular-nums; }
+  #night .meter { width: 160px; height: 4px; background: #15172a; border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  #night .meter div { height: 100%; width: 0; background: #4a3a20; transition: width .3s; }
+  #night .warn { color: #a05a40; font-size: 14px; text-align: center; display: none; }
+  #holdBtn {
+    position: absolute; bottom: calc(40px + env(safe-area-inset-bottom)); left: 24px; right: 24px;
+    padding: 18px; border-radius: 16px; background: #111322; color: #55597a; font-size: 16px;
+    overflow: hidden;
+  }
+  #holdBtn .fill { position: absolute; inset: 0; width: 0; background: #3a2a14; z-index: -1; }
+  #holdBtn span { position: relative; }
+
+  /* 履歴 */
+  .item { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; display: block; width: 100%; text-align: left; }
+  .item .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .item .title { font-weight: 700; }
+  .item .dur { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .item .range { color: var(--sub); font-size: 13px; margin: 2px 0 8px; }
+  .empty { text-align: center; color: var(--sub); padding: 60px 0; line-height: 1.8; }
+  .sub-btn { background: var(--card); border-radius: 12px; padding: 14px; width: 100%; margin-bottom: 8px; text-align: left; }
+
+  /* 詳細 */
+  .back { background: none; color: var(--accent); padding: 16px 0 0; font-size: 16px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--card); border-radius: 12px; padding: 14px; }
+  .stat .k { color: var(--sub); font-size: 12px; }
+  .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .chart { background: var(--card); border-radius: 14px; padding: 12px 8px 4px; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart text { fill: var(--sub); font-size: 10px; }
+  .delete { background: none; color: var(--danger); padding: 16px 0; width: 100%; margin-top: 12px; }
+
+  /* 下のタブ */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex;
+    background: rgba(11, 13, 26, .92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5;
+  }
+  nav button { flex: 1; background: none; padding: 10px 0 8px; color: var(--sub); font-size: 11px; }
+  nav button b { display: block; font-size: 20px; font-weight: 400; margin-bottom: 2px; }
+  nav button.on { color: var(--accent); }
+
+  #toast {
+    position: fixed; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 20;
+    background: #23284a; border-radius: 12px; padding: 14px; font-size: 14px; line-height: 1.5;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="toast"></div>
+
+<section id="recordView" class="view on">
+  <h1>睡眠きろく</h1>
+  <div class="hero">
+    <div class="moon">🌙</div>
+    <p>寝る前に「おやすみ」を押してください</p>
+  </div>
+  <ul class="tips">
+    <li><span>🔌</span>充電しながら、枕元に置いてください</li>
+    <li><span>📱</span>記録中は画面が真っ黒になります。画面を消したり、別のアプリに切り替えたりしないでください</li>
+    <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
+  </ul>
+  <button class="big-btn" id="startBtn">おやすみ(記録を始める)</button>
+  <p class="note">音そのものは保存しません。残るのは1分ごとの「物音の大きさ」の数字だけで、このiPhoneの外には送られません。</p>
+</section>
+
+<section id="historyView" class="view">
+  <h1>履歴</h1>
+  <div id="list"></div>
+  <h2>バックアップ</h2>
+  <button class="sub-btn" id="exportBtn">📤 記録をファイルに書き出す</button>
+  <button class="sub-btn" id="importBtn">📥 書き出したファイルから戻す</button>
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+  <p class="note">機種変更のときや、万一記録が消えたときのために、ときどき書き出しておくと安心です。</p>
+</section>
+
+<section id="detailView" class="view"></section>
+
+<div id="night">
+  <div class="clock" id="clock">0:00</div>
+  <div class="elapsed" id="elapsed"></div>
+  <div class="meter"><div id="meter"></div></div>
+  <div class="warn" id="warn">マイクが止まっています。<br>画面をタップすると再開します。</div>
+  <button id="holdBtn"><div class="fill" id="holdFill"></div><span>長押しで「おはよう」(記録を終える)</span></button>
+</div>
+
+<nav>
+  <button data-tab="recordView" class="on"><b>🌙</b>記録</button>
+  <button data-tab="historyView"><b>📊</b>履歴</button>
+</nav>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const KEY = "sleeplog.sessions";
+const PROGRESS_KEY = "sleeplog.inprogress";
+const DEMO = new URLSearchParams(location.search).has("demo");
+
+// ---------- 保存 ----------
+// 記録の形:{ id, start, end, samples: [[時刻(ミリ秒), 平均の音の大きさ(dB), 物音のあった秒数], ...] }
+function loadSessions() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
+}
+let sessions = DEMO ? makeDemo() : loadSessions();
+
+function saveSessions() {
+  if (DEMO) return;
+  sessions.sort((a, b) => b.start - a.start);
+  localStorage.setItem(KEY, JSON.stringify(sessions));
+}
+
+function addSession(s) {
+  sessions = sessions.filter((x) => x.id !== s.id);
+  sessions.push(s);
+  saveSessions();
+}
+
+// 記録中にページが閉じてしまった夜の分を、履歴に戻す
+function recoverInProgress() {
+  const raw = localStorage.getItem(PROGRESS_KEY);
+  if (!raw) return;
+  localStorage.removeItem(PROGRESS_KEY);
+  try {
+    const s = JSON.parse(raw);
+    if (s.samples.length) {
+      addSession(s);
+      toast("前回の記録が途中で止まっていたので、そこまでを履歴に保存しました。");
+    }
+  } catch {}
+}
+
+// ---------- 書式 ----------
+const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
+const hm = (t) => { const d = new Date(t); return d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0"); };
+const duration = (min) => Math.floor(min / 60) + "時間" + (min % 60) + "分";
+function nightTitle(start) {
+  const d = new Date(start);
+  if (d.getHours() < 12) d.setDate(d.getDate() - 1); // 夜中の0時を過ぎてから寝た日も、前の日の夜とする
+  return (d.getMonth() + 1) + "月" + d.getDate() + "日(" + WEEK[d.getDay()] + ")の夜";
+}
+
+// ---------- 眠りの深さの推定 ----------
+// 眠りが浅いときほど寝返りなどの物音が増える。
+// その夜の中で物音が少ない時間を「深い」、特に多い時間を「目覚め」とみなす。
+function analyze(s) {
+  const ev = s.samples.map((x) => x[2]);
+  const smooth = ev.map((_, i) => {
+    const lo = Math.max(0, i - 2), hi = Math.min(ev.length - 1, i + 2);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += ev[j];
+    return sum / (hi - lo + 1);
+  });
+  const sorted = [...smooth].sort((a, b) => a - b);
+  const pct = (p) => (sorted.length ? sorted[Math.floor((sorted.length - 1) * p)] : 0);
+  const deepCut = Math.max(0.3, pct(0.45));
+  const awakeCut = Math.max(4, pct(0.9));
+  const points = s.samples.map((x, i) => {
+    const v = smooth[i];
+    const stage = v <= deepCut ? "deep" : v >= awakeCut ? "awake" : "light";
+    return { t: x[0], depth: Math.max(0.03, Math.min(v / awakeCut, 1)), stage, level: x[1] };
+  });
+  const total = Math.max(1, Math.round((s.end - s.start) / 60000));
+  // 最後の1分は半端なことがあるので、記録した時間を超えないようにする
+  const asleep = Math.min(total, points.filter((p) => p.stage !== "awake").length);
+  const deep = Math.min(asleep, points.filter((p) => p.stage === "deep").length);
+  let wakes = 0;
+  for (let i = 1; i < points.length; i++) if (points[i - 1].stage !== "awake" && points[i].stage === "awake") wakes++;
+  return {
+    points, total, asleep, deep, wakes,
+    deepRatio: asleep ? deep / asleep : 0,
+  };
+}
+
+// ---------- グラフ(SVG) ----------
+function depthChart(a, start, end, compact) {
+  const W = 340, H = compact ? 40 : 190;
+  const L = compact ? 0 : 40, R = compact ? 0 : 6, T = compact ? 2 : 8, B = compact ? 0 : 20;
+  const x = (t) => L + ((t - start) / Math.max(1, end - start)) * (W - L - R);
+  const y = (d) => T + (1 - d) * (H - T - B);
+  const pts = a.points;
+  if (!pts.length) return "";
+  let line = pts.map((p, i) => (i ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.depth).toFixed(1)).join(" ");
+  const area = line + " L" + x(pts[pts.length - 1].t).toFixed(1) + " " + y(0) + " L" + x(pts[0].t).toFixed(1) + " " + y(0) + " Z";
+  const id = "g" + Math.random().toString(36).slice(2, 8);
+  let grid = "";
+  if (!compact) {
+    [["目覚め", 0.9], ["浅い", 0.5], ["深い", 0.1]].forEach(([label, d]) => {
+      grid += `<line x1="${L}" x2="${W - R}" y1="${y(d)}" y2="${y(d)}" stroke="#262b47" stroke-dasharray="2 3"/>`;
+      grid += `<text x="0" y="${y(d) + 3}">${label}</text>`;
+    });
+    grid += hourTicks(start, end, x, H);
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <defs><linearGradient id="${id}" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#5b5bd6"/><stop offset=".55" stop-color="#9a6fd8"/><stop offset="1" stop-color="#f0a04b"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#${id})" opacity=".9"/>
+  </svg>`;
+}
+
+function levelChart(a, start, end) {
+  const W = 340, H = 90, L = 40, R = 6, T = 6, B = 20;
+  const lv = a.points.map((p) => p.level);
+  const lo = Math.min(...lv), hi = Math.max(...lv, lo + 1);
+  const x = (t) => L + ((t - start) / Math.max(1, end - start)) * (W - L - R);
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const line = a.points.map((p, i) => (i ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.level).toFixed(1)).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}">
+    <text x="0" y="${T + 8}">大</text><text x="0" y="${H - B}">小</text>
+    ${hourTicks(start, end, x, H)}
+    <path d="${line}" fill="none" stroke="#f0a04b" stroke-width="1"/>
+  </svg>`;
+}
+
+function hourTicks(start, end, x, H) {
+  let out = "";
+  const d = new Date(start);
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  const hours = (end - start) / 3600000;
+  const step = hours > 9 ? 2 : 1;
+  for (let t = d.getTime(); t < end; t += 3600000) {
+    const h = new Date(t).getHours();
+    if (h % step) continue;
+    out += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 20}" stroke="#262b47"/>`;
+    out += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${h}時</text>`;
+  }
+  return out;
+}
+
+// ---------- 画面 ----------
+function show(view) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === view));
+  document.querySelectorAll("nav button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.tab === view || (view === "detailView" && b.dataset.tab === "historyView")));
+  if (view === "historyView") renderList();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+
+function renderList() {
+  const list = $("#list");
+  if (!sessions.length) {
+    list.innerHTML = `<div class="empty">まだ記録がありません<br>「記録」タブの「おやすみ」から始めてください</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  sessions.forEach((s) => {
+    const a = analyze(s);
+    const el = document.createElement("button");
+    el.className = "item";
+    el.innerHTML = `<div class="row"><span class="title">${nightTitle(s.start)}</span><span class="dur">${duration(a.asleep)}</span></div>
+      <div class="range">${hm(s.start)}〜${hm(s.end)}</div>${depthChart(a, s.start, s.end, true)}`;
+    el.addEventListener("click", () => showDetail(s.id));
+    list.appendChild(el);
+  });
+}
+
+function showDetail(id) {
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return;
+  const a = analyze(s);
+  $("#detailView").innerHTML = `
+    <button class="back" id="backBtn">‹ 履歴</button>
+    <h1>${nightTitle(s.start)}</h1>
+    <p style="color:var(--sub);margin-top:-8px">${hm(s.start)}〜${hm(s.end)}</p>
+    <div class="stats">
+      <div class="stat"><div class="k">眠っていた時間</div><div class="v">${duration(a.asleep)}</div></div>
+      <div class="stat"><div class="k">記録した時間</div><div class="v">${duration(a.total)}</div></div>
+      <div class="stat"><div class="k">深い眠りの割合</div><div class="v">${Math.round(a.deepRatio * 100)}%</div></div>
+      <div class="stat"><div class="k">目覚めた回数</div><div class="v">${a.wakes}回</div></div>
+    </div>
+    <h2>眠りの深さ</h2>
+    <div class="chart">${depthChart(a, s.start, s.end, false)}</div>
+    <h2>物音の大きさ</h2>
+    <div class="chart">${levelChart(a, s.start, s.end)}</div>
+    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。</p>
+    <button class="delete" id="deleteBtn">この記録を削除</button>`;
+  $("#backBtn").addEventListener("click", () => show("historyView"));
+  $("#deleteBtn").addEventListener("click", () => {
+    if (!confirm(nightTitle(s.start) + "の記録を削除します。元に戻せません。よろしいですか？")) return;
+    sessions = sessions.filter((x) => x.id !== s.id);
+    saveSessions();
+    show("historyView");
+  });
+  show("detailView");
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.style.display = "none"), 5000);
+}
+
+// ---------- 記録 ----------
+// マイクの音量を0.08秒ごとに測り、1秒ごと・1分ごとにまとめる
+const rec = { on: false };
+
+async function startRecording() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  } catch (e) {
+    alert("マイクが使えませんでした。\n\nマイクの使用を「許可」してください。許可のボタンが出ない場合は、「設定」アプリ →「アプリ」→「Safari」→「マイク」を確認してください。");
+    return;
+  }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 4096;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+
+  const now = Date.now();
+  Object.assign(rec, {
+    on: true, stream, ctx, analyser, buf: new Float32Array(analyser.fftSize),
+    id: String(now), start: now, samples: [], recent: [], lastTick: now,
+    sec: { start: now, sum: 0, n: 0, peak: -160 },
+    min: { start: now, levels: [], events: 0 },
+  });
+  rec.timer = setInterval(tick, 80);
+  rec.clockTimer = setInterval(drawClock, 1000);
+  drawClock();
+  await keepScreenOn();
+  $("#night").classList.add("on");
+}
+
+function tick() {
+  const now = Date.now();
+  // ページが止められていた時間があれば、その分は区切り直す
+  if (now - rec.lastTick > 5000) {
+    if (rec.min.levels.length >= 10) pushMinute();
+    rec.min = { start: now, levels: [], events: 0 };
+    rec.sec = { start: now, sum: 0, n: 0, peak: -160 };
+  }
+  rec.lastTick = now;
+
+  const track = rec.stream.getAudioTracks()[0];
+  const stopped = rec.ctx.state !== "running" || !track || track.readyState === "ended";
+  $("#warn").style.display = stopped ? "block" : "none";
+  if (stopped) return;
+
+  rec.analyser.getFloatTimeDomainData(rec.buf);
+  let sum = 0;
+  for (let i = 0; i < rec.buf.length; i++) sum += rec.buf[i] * rec.buf[i];
+  const db = 20 * Math.log10(Math.max(Math.sqrt(sum / rec.buf.length), 1e-8));
+
+  const sec = rec.sec;
+  sec.sum += db; sec.n++; sec.peak = Math.max(sec.peak, db);
+  if (now - sec.start < 1000) return;
+
+  const mean = sec.sum / sec.n;
+  // 「部屋の静かなときの音」= 直近2分のうち、静かなほうから2割の位置の音の大きさ
+  rec.recent.push(mean);
+  if (rec.recent.length > 120) rec.recent.shift();
+  const sorted = [...rec.recent].sort((a, b) => a - b);
+  const base = sorted[Math.floor(sorted.length * 0.2)];
+  // それより、はっきり大きい音がした秒を「物音あり」と数える
+  if (sec.peak > base + 10) rec.min.events++;
+  rec.min.levels.push(mean);
+  rec.sec = { start: now, sum: 0, n: 0, peak: -160 };
+  $("#meter").style.width = Math.min(100, Math.max(0, ((mean + 70) / 50) * 100)) + "%";
+
+  if (now - rec.min.start >= 60000) {
+    pushMinute();
+    rec.min = { start: now, levels: [], events: 0 };
+  }
+}
+
+function pushMinute() {
+  const m = rec.min;
+  const level = m.levels.reduce((a, b) => a + b, 0) / m.levels.length;
+  rec.samples.push([m.start, Math.round(level * 10) / 10, m.events]);
+  // ページが閉じても残るよう、1分ごとに途中保存
+  if (!DEMO) {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples }));
+  }
+}
+
+function stopRecording() {
+  clearInterval(rec.timer);
+  clearInterval(rec.clockTimer);
+  if (rec.min.levels.length >= 10) pushMinute();
+  rec.stream.getTracks().forEach((t) => t.stop());
+  rec.ctx.close();
+  releaseScreen();
+  rec.on = false;
+  $("#night").classList.remove("on");
+  localStorage.removeItem(PROGRESS_KEY);
+
+  if (!rec.samples.length) {
+    alert("記録が1分未満だったため、保存しませんでした。");
+    return;
+  }
+  const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples };
+  addSession(s);
+  showDetail(s.id);
+}
+
+function drawClock() {
+  const now = Date.now();
+  $("#clock").textContent = hm(now);
+  const m = Math.floor((now - rec.start) / 60000);
+  $("#elapsed").textContent = "記録中 " + duration(m);
+}
+
+// 画面が自動で消えないようにする
+async function keepScreenOn() {
+  try { rec.wake = await navigator.wakeLock.request("screen"); } catch {}
+}
+function releaseScreen() {
+  try { rec.wake && rec.wake.release(); } catch {}
+  rec.wake = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (rec.on && document.visibilityState === "visible") {
+    keepScreenOn();
+    rec.ctx.resume().catch(() => {});
+  }
+});
+
+// 真っ黒な画面をタップしたら、止まったマイクを再開する
+$("#night").addEventListener("click", () => { if (rec.on) rec.ctx.resume().catch(() => {}); });
+
+// 寝ぼけて止めないよう、長押し(1.5秒)で終了
+(function setupHold() {
+  const btn = $("#holdBtn"), fill = $("#holdFill");
+  let timer = null;
+  const begin = (e) => {
+    e.preventDefault();
+    fill.style.transition = "width 1.5s linear";
+    fill.style.width = "100%";
+    timer = setTimeout(() => { cancel(); stopRecording(); }, 1500);
+  };
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    fill.style.transition = "none";
+    fill.style.width = "0";
+  };
+  btn.addEventListener("pointerdown", begin);
+  ["pointerup", "pointerleave", "pointercancel"].forEach((n) => btn.addEventListener(n, cancel));
+  btn.addEventListener("contextmenu", (e) => e.preventDefault());
+})();
+
+$("#startBtn").addEventListener("click", startRecording);
+
+// ---------- バックアップ ----------
+$("#exportBtn").addEventListener("click", async () => {
+  if (!sessions.length) { alert("まだ記録がありません。"); return; }
+  const d = new Date();
+  const name = `睡眠きろく_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
+  const file = new File([JSON.stringify({ app: "sleeplog", version: 1, sessions })], name, { type: "application/json" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch {}
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(file);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+$("#importBtn").addEventListener("click", () => $("#importFile").click());
+$("#importFile").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.app !== "sleeplog" || !Array.isArray(data.sessions)) throw new Error();
+    const known = new Set(sessions.map((s) => s.id));
+    const added = data.sessions.filter((s) => !known.has(s.id) && Array.isArray(s.samples));
+    sessions.push(...added);
+    saveSessions();
+    renderList();
+    toast(added.length + "件の記録を戻しました。");
+  } catch {
+    alert("このファイルは読み込めませんでした。「睡眠きろく」で書き出したファイルを選んでください。");
+  }
+});
+
+// ---------- 見本データ(?demo を付けて開いたときだけ。保存はしない) ----------
+function makeDemo() {
+  const out = [];
+  for (let k = 1; k <= 3; k++) {
+    const d = new Date();
+    d.setDate(d.getDate() - k);
+    d.setHours(23, 20 + k * 7, 0, 0);
+    const start = d.getTime(), minutes = 400 + k * 15, samples = [];
+    for (let m = 0; m < minutes; m++) {
+      const wave = (1 - Math.cos((m / 90) * 2 * Math.PI)) / 2;
+      let ev = wave * wave * 5 + Math.random() * 1.2;
+      if (m < 15 || m > minutes - 10) ev += 6;
+      if (m % 137 === 0) ev += 10;
+      samples.push([start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10, Math.floor(ev)]);
+    }
+    out.push({ id: "demo" + k, start, end: start + minutes * 60000, samples });
+  }
+  return out;
+}
+
+// ---------- 起動 ----------
+if (!DEMO) recoverInProgress();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+</script>
+</body>
+</html>
