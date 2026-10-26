@@ -158,6 +158,14 @@ const $ = (s) => document.querySelector(s);
 const KEY = "sleeplog.sessions";
 const PROGRESS_KEY = "sleeplog.inprogress";
 const DEMO = new URLSearchParams(location.search).has("demo");
+// 「物音あり」とみなす大きさ(部屋の静かなときより何dB大きいか)。4段階すべてで数えて記録する。
+// 1分ごとの記録は [時刻, 音の大きさ, +10dBの秒数, +4dBの秒数, +6dBの秒数, +8dBの秒数]
+// (10月26日より前の記録は、最初の3つだけ)
+const THRESHOLDS = [4, 6, 8, 10];
+const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5 };
+// 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
+const SHOW_DB = 6;
+const eventsOf = (x) => (x.length > 3 ? x[SAMPLE_COL[SHOW_DB]] : x[2]);
 
 // ---------- 保存 ----------
 // 記録の形:{ id, start, end, samples: [[時刻(ミリ秒), 平均の音の大きさ(dB), 物音のあった秒数], ...] }
@@ -257,23 +265,29 @@ function nightTitle(start) {
 
 // ---------- 眠りの深さの推定 ----------
 // 眠りが浅いときほど寝返りなどの物音が増える。
-// その夜の中で物音が少ない時間を「深い」、特に多い時間を「目覚め」とみなす。
+// 前後10分ほど物音がほとんど無い時間を「深い」、物音が続く時間を「目覚め」とみなす。
 function analyze(s) {
-  const ev = s.samples.map((x) => x[2]);
-  const smooth = ev.map((_, i) => {
-    const lo = Math.max(0, i - 2), hi = Math.min(ev.length - 1, i + 2);
+  const ev = s.samples.map(eventsOf);
+  // 前後 r 分の物音の秒数の合計
+  const around = (r) => ev.map((_, i) => {
     let sum = 0;
-    for (let j = lo; j <= hi; j++) sum += ev[j];
-    return sum / (hi - lo + 1);
+    for (let j = Math.max(0, i - r); j <= Math.min(ev.length - 1, i + r); j++) sum += ev[j];
+    return sum;
   });
-  const sorted = [...smooth].sort((a, b) => a - b);
-  const pct = (p) => (sorted.length ? sorted[Math.floor((sorted.length - 1) * p)] : 0);
-  const deepCut = Math.max(0.3, pct(0.45));
-  const awakeCut = Math.max(4, pct(0.9));
+  const near = around(2), wide = around(5);
+  const pct = (arr, p) => {
+    const sorted = [...arr].sort((a, b) => a - b);
+    return sorted.length ? sorted[Math.floor((sorted.length - 1) * p)] : 0;
+  };
+  // 深い:前後5分で物音1秒以下(物音の多い夜は、その夜の静かなほうから3割まで)
+  const deepCut = Math.max(1, pct(wide, 0.3));
+  // 目覚め:前後2分で物音10秒以上(物音の多い夜は、その夜の多いほうから1割まで)
+  const awakeCut = Math.max(10, pct(near, 0.9));
   const points = s.samples.map((x, i) => {
-    const v = smooth[i];
-    const stage = v <= deepCut ? "deep" : v >= awakeCut ? "awake" : "light";
-    return { t: x[0], depth: Math.max(0.03, Math.min(v / awakeCut, 1)), stage, level: x[1] };
+    const stage = near[i] >= awakeCut ? "awake" : wide[i] <= deepCut ? "deep" : "light";
+    // グラフの高さ:深い=0.1、浅い=0.3〜0.8(物音が多いほど高く)、目覚め=1
+    const depth = stage === "awake" ? 1 : stage === "deep" ? 0.1 : 0.3 + 0.5 * Math.min(1, near[i] / awakeCut);
+    return { t: x[0], depth, stage, level: x[1] };
   });
   const total = Math.max(1, Math.round((s.end - s.start) / 60000));
   // 最後の1分は半端なことがあるので、記録した時間を超えないようにする
@@ -441,7 +455,7 @@ async function startRecording() {
     on: true, stream, ctx, analyser, buf: new Float32Array(analyser.fftSize),
     id: String(now), start: now, samples: [], recent: [], lastTick: now,
     sec: { start: now, sum: 0, n: 0, peak: -160 },
-    min: { start: now, levels: [], events: 0 },
+    min: { start: now, levels: [], events: THRESHOLDS.map(() => 0) },
   });
   rec.timer = setInterval(tick, 80);
   rec.clockTimer = setInterval(drawClock, 1000);
@@ -455,7 +469,7 @@ function tick() {
   // ページが止められていた時間があれば、その分は区切り直す
   if (now - rec.lastTick > 5000) {
     if (rec.min.levels.length >= 10) pushMinute();
-    rec.min = { start: now, levels: [], events: 0 };
+    rec.min = { start: now, levels: [], events: THRESHOLDS.map(() => 0) };
     rec.sec = { start: now, sum: 0, n: 0, peak: -160 };
   }
   rec.lastTick = now;
@@ -480,22 +494,24 @@ function tick() {
   if (rec.recent.length > 120) rec.recent.shift();
   const sorted = [...rec.recent].sort((a, b) => a - b);
   const base = sorted[Math.floor(sorted.length * 0.2)];
-  // それより、はっきり大きい音がした秒を「物音あり」と数える
-  if (sec.peak > base + 10) rec.min.events++;
+  // それより大きい音がした秒を「物音あり」と数える(感度を後から選べるよう、4段階それぞれで数える)
+  THRESHOLDS.forEach((d, k) => { if (sec.peak > base + d) rec.min.events[k]++; });
   rec.min.levels.push(mean);
   rec.sec = { start: now, sum: 0, n: 0, peak: -160 };
   $("#meter").style.width = Math.min(100, Math.max(0, ((mean + 70) / 50) * 100)) + "%";
 
   if (now - rec.min.start >= 60000) {
     pushMinute();
-    rec.min = { start: now, levels: [], events: 0 };
+    rec.min = { start: now, levels: [], events: THRESHOLDS.map(() => 0) };
   }
 }
 
 function pushMinute() {
   const m = rec.min;
   const level = m.levels.reduce((a, b) => a + b, 0) / m.levels.length;
-  rec.samples.push([m.start, Math.round(level * 10) / 10, m.events]);
+  const row = [m.start, Math.round(level * 10) / 10];
+  THRESHOLDS.forEach((d, k) => { row[SAMPLE_COL[d]] = m.events[k]; });
+  rec.samples.push(row);
   // ページが閉じても残るよう、1分ごとに途中保存
   saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples });
 }
@@ -663,7 +679,10 @@ function makeDemo() {
       let ev = wave * wave * 5 + Math.random() * 1.2;
       if (m < 15 || m > minutes - 10) ev += 6;
       if (m % 137 === 0) ev += 10;
-      samples.push([start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10, Math.floor(ev)]);
+      const e = Math.floor(ev);
+      // [時刻, 音の大きさ, +10dB, +4dB, +6dB, +8dB]
+      samples.push([start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10,
+        Math.floor(e / 2), e + 2, e, Math.floor(e * 0.7)]);
     }
     out.push({ id: "demo" + k, start, end: start + minutes * 60000, samples });
   }
