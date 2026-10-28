@@ -89,6 +89,17 @@
   .chart svg { display: block; width: 100%; height: auto; }
   .chart text { fill: var(--sub); font-size: 10px; }
   .delete { background: none; color: var(--danger); padding: 16px 0; width: 100%; margin-top: 12px; }
+  .clip { background: var(--card); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+  .clip .row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; margin-bottom: 6px; }
+  .clip .row b { font-variant-numeric: tabular-nums; }
+  .clip .row span { color: var(--sub); }
+  .clip .share { background: none; color: var(--accent); font-size: 13px; padding: 4px 0 4px 12px; }
+  .clip audio { display: block; width: 100%; height: 36px; }
+
+  /* 録音する・しないの切り替え */
+  .switch { display: flex; align-items: center; gap: 12px; background: var(--card); border-radius: 12px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+  .switch input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; margin: 0; }
+  .switch small { display: block; color: var(--sub); font-size: 12px; }
 
   /* 下のタブ */
   nav {
@@ -123,8 +134,12 @@
     <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
     <li><span>💡</span>それでも画面が消えてしまうときは、「設定」→「画面表示と明るさ」→「自動ロック」を「なし」にしてください(朝に元に戻すのを忘れずに)</li>
   </ul>
+  <label class="switch">
+    <input type="checkbox" id="clipToggle">
+    <span>🎙️ 大きな物音のときだけ、10秒ずつ録音する<small>朝に「履歴」で聞けます。いびきか寝返りかを確かめる用です。横で寝る人がいる夜は、了解をもらってから使ってください。</small></span>
+  </label>
   <button class="big-btn" id="startBtn">おやすみ(記録を始める)</button>
-  <p class="note">音そのものは保存しません。残るのは1分ごとの「物音の大きさ」の数字だけで、このiPhoneの外には送られません。</p>
+  <p class="note">記録は1分ごとの「物音の大きさ」の数字です。録音をオンにした夜だけ、大きな物音の前後10秒の音も残します(1晩最大60件・7日たつと自動で消えます)。どちらもこのiPhoneの中だけに保存し、外には送られません。</p>
 </section>
 
 <section id="historyView" class="view">
@@ -134,7 +149,7 @@
   <button class="sub-btn" id="exportBtn">📤 記録をファイルに書き出す</button>
   <button class="sub-btn" id="importBtn">📥 書き出したファイルから戻す</button>
   <input type="file" id="importFile" accept="application/json,.json" hidden>
-  <p class="note">機種変更のときや、万一記録が消えたときのために、ときどき書き出しておくと安心です。</p>
+  <p class="note">機種変更のときや、万一記録が消えたときのために、ときどき書き出しておくと安心です。録音はファイルに含まれません(録音は各夜の画面の「送る」から1件ずつ書き出せます)。</p>
 </section>
 
 <section id="detailView" class="view"></section>
@@ -167,20 +182,36 @@ const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5 };
 const SHOW_DB = 6;
 const eventsOf = (x) => (x.length > 3 ? x[SAMPLE_COL[SHOW_DB]] : x[2]);
 
+// 録音:直近10秒のうち2秒以上「基準+6dB」を超えたら、その前3秒・後7秒を録音する。
+// (マイクの雑音で1秒だけ超えることがあるので、1秒だけでは録らない)
+// 録り始めから5分は次を録らない。1晩最大60件。最初の3分(寝る前の操作)は録らない。
+const CLIP_DB = 6, CLIP_HITS = 2, CLIP_PRE = 3, CLIP_POST = 7, CLIP_RATE = 8000;
+const CLIP_GAP = 5 * 60000, CLIP_MAX = 60, CLIP_SKIP = 3 * 60000, CLIP_KEEP_DAYS = 7;
+const CLIP_SETTING = "sleeplog.clips";
+
 // ---------- 保存 ----------
 // 記録の形:{ id, start, end, samples: [[時刻(ミリ秒), 平均の音の大きさ(dB), 物音のあった秒数], ...] }
 // 記録はブラウザの大きな保存場所(IndexedDB)に1晩1件で入れる。
 // 以前の版は localStorage(上限約5MB)に入れていたので、最初に開いたときに引っ越す。
 // 記録中の途中保存だけは、小さくてすぐ書ける localStorage を使う。
-const DB_NAME = "sleeplog", STORE = "sessions";
+const DB_NAME = "sleeplog", STORE = "sessions", CLIPS = "clips";
 const SAVE_FAILED = "記録を保存できませんでした。\n\n今回の記録は消さずに残してあり、次に開いたときにもう一度保存します。何度も続く場合は、「履歴」→「記録をファイルに書き出す」でバックアップを取ってください。";
 let db = null;
 let sessions = [];
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: "id" });
+      // 録音:{ id, session(どの夜か), t(録音の始まりの時刻), rise(基準より何dB大きかったか), wav }
+      if (!d.objectStoreNames.contains(CLIPS)) {
+        const c = d.createObjectStore(CLIPS, { keyPath: "id" });
+        c.createIndex("session", "session");
+        c.createIndex("t", "t");
+      }
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -208,6 +239,40 @@ function writeDB(puts, deletes = []) {
 }
 
 const sortSessions = () => sessions.sort((a, b) => b.start - a.start);
+
+// ---------- 録音の保存 ----------
+function addClip(c) {
+  if (DEMO || !db) return Promise.reject();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIPS, "readwrite");
+    tx.objectStore(CLIPS).put(c);
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+function clipsOf(sessionId) {
+  if (DEMO || !db) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(CLIPS).objectStore(CLIPS).index("session").getAll(sessionId);
+    req.onsuccess = () => resolve(req.result.sort((a, b) => a.t - b.t));
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 条件に合う録音を消す(どの夜か、またはこの時刻より古いもの)
+function deleteClips(range, indexName) {
+  if (DEMO || !db) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIPS, "readwrite");
+    const req = tx.objectStore(CLIPS).index(indexName).openCursor(range);
+    req.onsuccess = () => { const cur = req.result; if (cur) { cur.delete(); cur.continue(); } };
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+const deleteClipsOf = (sessionId) => deleteClips(IDBKeyRange.only(sessionId), "session");
+const pruneOldClips = () => deleteClips(IDBKeyRange.upperBound(Date.now() - CLIP_KEEP_DAYS * 86400000), "t");
 
 async function initStorage() {
   if (DEMO) {
@@ -406,18 +471,54 @@ function showDetail(id) {
     <h2>物音の大きさ</h2>
     <div class="chart">${levelChart(a, s.start, s.end)}</div>
     <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。</p>
+    <div id="clipSection"></div>
     <button class="delete" id="deleteBtn">この記録を削除</button>`;
   $("#backBtn").addEventListener("click", () => show("historyView"));
   $("#deleteBtn").addEventListener("click", () => {
-    if (!confirm(nightTitle(s.start) + "の記録を削除します。元に戻せません。よろしいですか？")) return;
+    if (!confirm(nightTitle(s.start) + "の記録を削除します。録音も一緒に消えます。元に戻せません。よろしいですか？")) return;
     writeDB([], [s.id])
       .then(() => {
         sessions = sessions.filter((x) => x.id !== s.id);
+        deleteClipsOf(s.id).catch(() => {});
         show("historyView");
       })
       .catch(() => alert("削除できませんでした。もう一度お試しください。"));
   });
   show("detailView");
+  renderClips(s.id);
+}
+
+// その夜の録音を一覧にする(録音が無い夜は何も出さない)
+let clipUrls = [];
+async function renderClips(sessionId) {
+  clipUrls.forEach((u) => URL.revokeObjectURL(u));
+  clipUrls = [];
+  let clips;
+  try { clips = await clipsOf(sessionId); } catch { return; }
+  const box = $("#clipSection");
+  if (!box || !clips.length) return;
+  box.innerHTML = `<h2>録音(${clips.length}件)</h2>
+    <p class="note" style="margin-top:0">大きな物音がしたときの前後10秒です。小さな音も聞こえるよう、音量を上げて保存しています。録音は${CLIP_KEEP_DAYS}日たつと自動で消えます。</p>`;
+  clips.forEach((c) => {
+    const file = new File([c.wav], `SleepLog_${c.id}.wav`, { type: "audio/wav" });
+    const url = URL.createObjectURL(file);
+    clipUrls.push(url);
+    const el = document.createElement("div");
+    el.className = "clip";
+    el.innerHTML = `<div class="row"><div><b>${hm(c.t + CLIP_PRE * 1000)}</b> <span>物音 +${c.rise}dB</span></div><button class="share">送る</button></div>
+      <audio controls preload="none" src="${url}"></audio>`;
+    el.querySelector(".share").addEventListener("click", async () => {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); } catch {}
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+    });
+    box.appendChild(el);
+  });
 }
 
 let toastTimer;
@@ -448,7 +549,8 @@ async function startRecording() {
   await ctx.resume();
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 4096;
-  ctx.createMediaStreamSource(stream).connect(analyser);
+  const source = ctx.createMediaStreamSource(stream);
+  source.connect(analyser);
 
   const now = Date.now();
   Object.assign(rec, {
@@ -456,7 +558,9 @@ async function startRecording() {
     id: String(now), start: now, samples: [], recent: [], lastTick: now,
     sec: { start: now, sum: 0, n: 0, peak: -160 },
     min: { start: now, levels: [], events: THRESHOLDS.map(() => 0) },
+    clipper: null,
   });
+  if ($("#clipToggle").checked) startClipper(ctx, source);
   rec.timer = setInterval(tick, 80);
   rec.clockTimer = setInterval(drawClock, 1000);
   drawClock();
@@ -496,6 +600,8 @@ function tick() {
   const base = sorted[Math.floor(sorted.length * 0.2)];
   // それより大きい音がした秒を「物音あり」と数える(感度を後から選べるよう、4段階それぞれで数える)
   THRESHOLDS.forEach((d, k) => { if (sec.peak > base + d) rec.min.events[k]++; });
+  // 録音がうまくいかなくても、物音の記録は止めない
+  try { if (sec.peak > base + CLIP_DB) maybeClip(now, sec.peak - base); } catch {}
   rec.min.levels.push(mean);
   rec.sec = { start: now, sum: 0, n: 0, peak: -160 };
   $("#meter").style.width = Math.min(100, Math.max(0, ((mean + 70) / 50) * 100)) + "%";
@@ -521,10 +627,108 @@ function saveProgress(s) {
   try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(s)); } catch {}
 }
 
+// ---------- 録音 ----------
+// マイクの音を1秒に8000回の細かさに落として、直近3秒分をいつも手元に持っておく。
+// 大きな物音がしたら、手元の3秒にその後の7秒をつなげて、10秒の録音として保存する。
+function startClipper(ctx, source) {
+  try {
+    const node = ctx.createScriptProcessor(4096, 1, 1);
+    const mute = ctx.createGain();
+    mute.gain.value = 0; // スピーカーからは鳴らさない(つながっていないと動かないため)
+    source.connect(node);
+    node.connect(mute);
+    mute.connect(ctx.destination);
+    const c = {
+      node, mute, ring: new Float32Array(CLIP_RATE * CLIP_PRE), pos: 0, filled: 0,
+      cur: null, count: 0, saved: 0, failed: 0, last: -Infinity, hits: [],
+    };
+    const ratio = ctx.sampleRate / CLIP_RATE;
+    let acc = 0, accN = 0, step = 0;
+    const push = (v) => {
+      c.ring[c.pos] = v;
+      c.pos = (c.pos + 1) % c.ring.length;
+      c.filled = Math.min(c.ring.length, c.filled + 1);
+      if (c.cur) {
+        c.cur.buf[c.cur.n++] = v;
+        if (c.cur.n >= c.cur.buf.length) finishClip();
+      }
+    };
+    node.onaudioprocess = (e) => {
+      try {
+        const input = e.inputBuffer.getChannelData(0);
+        for (let i = 0; i < input.length; i++) {
+          acc += input[i]; accN++; step++;
+          if (step >= ratio) { push(acc / accN); acc = 0; accN = 0; step -= ratio; }
+        }
+      } catch {}
+    };
+    rec.clipper = c;
+  } catch {
+    rec.clipper = null;
+  }
+}
+
+function maybeClip(now, rise) {
+  const c = rec.clipper;
+  if (!c) return;
+  c.hits.push(now);
+  c.hits = c.hits.filter((t) => now - t <= 10000);
+  if (c.cur || c.hits.length < CLIP_HITS || c.count >= CLIP_MAX) return;
+  if (now - rec.start < CLIP_SKIP || now - c.last < CLIP_GAP || c.filled < c.ring.length) return;
+  const buf = new Float32Array(CLIP_RATE * (CLIP_PRE + CLIP_POST));
+  for (let k = 0; k < c.ring.length; k++) buf[k] = c.ring[(c.pos + k) % c.ring.length];
+  c.cur = { t: now - CLIP_PRE * 1000, rise: Math.round(rise), buf, n: c.ring.length };
+  c.last = now;
+  c.count++;
+}
+
+function finishClip() {
+  const c = rec.clipper, cur = c.cur;
+  c.cur = null;
+  if (!cur || cur.n < CLIP_RATE) return;
+  addClip({ id: rec.id + "-" + cur.t, session: rec.id, t: cur.t, rise: cur.rise, wav: toWav(cur.buf.subarray(0, cur.n)) })
+    .then(() => c.saved++)
+    .catch(() => c.failed++);
+}
+
+// 夜の音はとても小さいので、いちばん大きいところが聞きやすい大きさになるよう音量を上げる(最大1000倍)
+function toWav(x) {
+  let mean = 0;
+  for (let i = 0; i < x.length; i++) mean += x[i];
+  mean /= x.length;
+  let peak = 0;
+  for (let i = 0; i < x.length; i++) peak = Math.max(peak, Math.abs(x[i] - mean));
+  const gain = Math.min(1000, 0.7 / Math.max(peak, 1e-6));
+  const out = new DataView(new ArrayBuffer(44 + x.length * 2));
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); out.setUint32(4, 36 + x.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, CLIP_RATE, true); out.setUint32(28, CLIP_RATE * 2, true);
+  out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+  str(36, "data"); out.setUint32(40, x.length * 2, true);
+  for (let i = 0; i < x.length; i++) {
+    const v = Math.max(-1, Math.min(1, (x[i] - mean) * gain));
+    out.setInt16(44 + i * 2, Math.round(v * 32767), true);
+  }
+  return out.buffer;
+}
+
+function stopClipper() {
+  const c = rec.clipper;
+  if (!c) return;
+  try {
+    if (c.cur) finishClip(); // 録音の途中で終えたときは、そこまでを残す
+    c.node.onaudioprocess = null;
+    c.node.disconnect();
+    c.mute.disconnect();
+  } catch {}
+}
+
 function stopRecording() {
   clearInterval(rec.timer);
   clearInterval(rec.clockTimer);
   if (rec.min.levels.length >= 10) pushMinute();
+  stopClipper();
   rec.stream.getTracks().forEach((t) => t.stop());
   rec.ctx.close();
   releaseScreen();
@@ -533,6 +737,7 @@ function stopRecording() {
 
   if (!rec.samples.length) {
     localStorage.removeItem(PROGRESS_KEY);
+    deleteClipsOf(rec.id).catch(() => {});
     alert("記録が1分未満だったため、保存しませんでした。");
     return;
   }
@@ -543,6 +748,8 @@ function stopRecording() {
     .then(() => {
       localStorage.removeItem(PROGRESS_KEY);
       showDetail(s.id);
+      const c = rec.clipper;
+      if (c && c.failed) toast(`録音${c.failed}件を保存できませんでした(物音の記録は保存済みです)。`);
     })
     .catch(() => alert(SAVE_FAILED));
 }
@@ -551,7 +758,7 @@ function drawClock() {
   const now = Date.now();
   $("#clock").textContent = hm(now);
   const m = Math.floor((now - rec.start) / 60000);
-  $("#elapsed").textContent = "記録中 " + duration(m);
+  $("#elapsed").textContent = "記録中 " + duration(m) + (rec.clipper ? " ・ 録音" + rec.clipper.count + "件" : "");
 }
 
 // 画面が自動で消えないようにする。
@@ -616,6 +823,12 @@ $("#night").addEventListener("click", () => {
   ["pointerup", "pointerleave", "pointercancel"].forEach((n) => btn.addEventListener(n, cancel));
   btn.addEventListener("contextmenu", (e) => e.preventDefault());
 })();
+
+// 録音する・しないは、次に開いたときも同じにしておく(最初はオン)
+try { $("#clipToggle").checked = localStorage.getItem(CLIP_SETTING) !== "off"; } catch { $("#clipToggle").checked = true; }
+$("#clipToggle").addEventListener("change", (e) => {
+  try { localStorage.setItem(CLIP_SETTING, e.target.checked ? "on" : "off"); } catch {}
+});
 
 $("#startBtn").addEventListener("click", () => {
   startAwakeVideo();
@@ -692,6 +905,7 @@ function makeDemo() {
 // ---------- 起動 ----------
 initStorage()
   .then(() => (DEMO ? null : recoverInProgress()))
+  .then(() => { if (!DEMO) pruneOldClips().catch(() => {}); })
   .catch(() => alert("記録の保存場所を開けませんでした。プライベートブラウズになっていないか確認してください。"))
   .then(() => { if ($("#historyView").classList.contains("on")) renderList(); });
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
