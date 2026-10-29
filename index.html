@@ -23,6 +23,7 @@
     --awake: #f0a04b;
     --accent: #6c6cf0;
     --danger: #e5675f;
+    --snore: #3fb6a0;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
@@ -83,6 +84,7 @@
   .back { background: none; color: var(--accent); padding: 16px 0 0; font-size: 16px; }
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat { background: var(--card); border-radius: 12px; padding: 14px; }
+  .stat.wide { grid-column: 1 / -1; }
   .stat .k { color: var(--sub); font-size: 12px; }
   .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
   .chart { background: var(--card); border-radius: 14px; padding: 12px 8px 4px; }
@@ -181,6 +183,10 @@ const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5 };
 // 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
 const SHOW_DB = 6;
 const eventsOf = (x) => (x.length > 3 ? x[SAMPLE_COL[SHOW_DB]] : x[2]);
+// いびき:1分に SNORE_SEC 秒以上の物音が SNORE_MIN 分以上続く区間。
+// 寝返りは数秒で終わるので、何分も続くのは呼吸ごとの音(いびき)とみなし、目覚めに数えず浅い眠りにする。
+// (10月29日、録音で4時台の長く続く物音がいびきだったと確かめて追加)
+const SNORE_SEC = 5, SNORE_MIN = 5;
 
 // 録音:直近10秒のうち2秒以上「基準+6dB」を超えたら、その前3秒・後7秒を録音する。
 // (マイクの雑音で1秒だけ超えることがあるので、1秒だけでは録らない)
@@ -331,28 +337,45 @@ function nightTitle(start) {
 // ---------- 眠りの深さの推定 ----------
 // 眠りが浅いときほど寝返りなどの物音が増える。
 // 前後10分ほど物音がほとんど無い時間を「深い」、物音が続く時間を「目覚め」とみなす。
+// いびきの区間に入る分を true にする
+function snoreMinutes(ev) {
+  const snore = ev.map(() => false);
+  for (let i = 0; i < ev.length; ) {
+    let j = i;
+    while (j < ev.length && ev[j] >= SNORE_SEC) j++;
+    if (j - i >= SNORE_MIN) for (let k = i; k < j; k++) snore[k] = true;
+    i = Math.max(j, i + 1);
+  }
+  return snore;
+}
+
 function analyze(s) {
   const ev = s.samples.map(eventsOf);
+  const snore = snoreMinutes(ev);
+  // いびきの分の物音は、まわりの分の目覚め・深さの判定にも入れない
+  const ev2 = ev.map((e, i) => (snore[i] ? 0 : e));
   // 前後 r 分の物音の秒数の合計
-  const around = (r) => ev.map((_, i) => {
+  const around = (arr, r) => arr.map((_, i) => {
     let sum = 0;
-    for (let j = Math.max(0, i - r); j <= Math.min(ev.length - 1, i + r); j++) sum += ev[j];
+    for (let j = Math.max(0, i - r); j <= Math.min(arr.length - 1, i + r); j++) sum += arr[j];
     return sum;
   });
-  const near = around(2), wide = around(5);
+  const near = around(ev2, 2), wide = around(ev2, 5);
   const pct = (arr, p) => {
     const sorted = [...arr].sort((a, b) => a - b);
     return sorted.length ? sorted[Math.floor((sorted.length - 1) * p)] : 0;
   };
+  // 基準の線は、いびきを外す前の物音で決める
+  // (外してから決めると線が下がり、ふつうの寝返りまで目覚めに数えてしまうため)
   // 深い:前後5分で物音1秒以下(物音の多い夜は、その夜の静かなほうから3割まで)
-  const deepCut = Math.max(1, pct(wide, 0.3));
+  const deepCut = Math.max(1, pct(around(ev, 5), 0.3));
   // 目覚め:前後2分で物音10秒以上(物音の多い夜は、その夜の多いほうから1割まで)
-  const awakeCut = Math.max(10, pct(near, 0.9));
+  const awakeCut = Math.max(10, pct(around(ev, 2), 0.9));
   const points = s.samples.map((x, i) => {
-    const stage = near[i] >= awakeCut ? "awake" : wide[i] <= deepCut ? "deep" : "light";
-    // グラフの高さ:深い=0.1、浅い=0.3〜0.8(物音が多いほど高く)、目覚め=1
-    const depth = stage === "awake" ? 1 : stage === "deep" ? 0.1 : 0.3 + 0.5 * Math.min(1, near[i] / awakeCut);
-    return { t: x[0], depth, stage, level: x[1] };
+    const stage = snore[i] ? "light" : near[i] >= awakeCut ? "awake" : wide[i] <= deepCut ? "deep" : "light";
+    // グラフの高さ:深い=0.1、浅い=0.3〜0.8(物音が多いほど高く。いびきの分は0.5)、目覚め=1
+    const depth = snore[i] ? 0.5 : stage === "awake" ? 1 : stage === "deep" ? 0.1 : 0.3 + 0.5 * Math.min(1, near[i] / awakeCut);
+    return { t: x[0], depth, stage, snore: snore[i], level: x[1] };
   });
   const total = Math.max(1, Math.round((s.end - s.start) / 60000));
   // 最後の1分は半端なことがあるので、記録した時間を超えないようにする
@@ -362,6 +385,7 @@ function analyze(s) {
   for (let i = 1; i < points.length; i++) if (points[i - 1].stage !== "awake" && points[i].stage === "awake") wakes++;
   return {
     points, total, asleep, deep, wakes,
+    snore: Math.min(asleep, snore.filter(Boolean).length),
     deepRatio: asleep ? deep / asleep : 0,
   };
 }
@@ -385,12 +409,22 @@ function depthChart(a, start, end, compact) {
     });
     grid += hourTicks(start, end, x, H);
   }
+  // いびきとみなした時間を、グラフの下に緑の線で示す
+  let snore = "";
+  if (!compact) {
+    pts.forEach((p, i) => {
+      if (!p.snore) return;
+      const t2 = i + 1 < pts.length ? pts[i + 1].t : p.t + 60000;
+      snore += `<rect x="${x(p.t).toFixed(1)}" y="${y(0) - 4}" width="${Math.max(0.5, x(t2) - x(p.t)).toFixed(1)}" height="4" fill="#3fb6a0"/>`;
+    });
+  }
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
     <defs><linearGradient id="${id}" x1="0" y1="1" x2="0" y2="0">
       <stop offset="0" stop-color="#5b5bd6"/><stop offset=".55" stop-color="#9a6fd8"/><stop offset="1" stop-color="#f0a04b"/>
     </linearGradient></defs>
     ${grid}
     <path d="${area}" fill="url(#${id})" opacity=".9"/>
+    ${snore}
   </svg>`;
 }
 
@@ -465,12 +499,13 @@ function showDetail(id) {
       <div class="stat"><div class="k">記録した時間</div><div class="v">${duration(a.total)}</div></div>
       <div class="stat"><div class="k">深い眠りの割合</div><div class="v">${Math.round(a.deepRatio * 100)}%</div></div>
       <div class="stat"><div class="k">目覚めた回数</div><div class="v">${a.wakes}回</div></div>
+      <div class="stat wide"><div class="k">いびき(物音が何分も続いた時間)</div><div class="v">${duration(a.snore)}</div></div>
     </div>
     <h2>眠りの深さ</h2>
     <div class="chart">${depthChart(a, s.start, s.end, false)}</div>
     <h2>物音の大きさ</h2>
     <div class="chart">${levelChart(a, s.start, s.end)}</div>
-    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。</p>
+    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。<br>※ グラフの下の<span style="color:var(--snore)">緑の線</span>は、いびきとみなした時間です(目覚めには数えず、浅い眠りにしています)。横で寝ている人のいびきも数えてしまいます。</p>
     <div id="clipSection"></div>
     <button class="delete" id="deleteBtn">この記録を削除</button>`;
   $("#backBtn").addEventListener("click", () => show("historyView"));
