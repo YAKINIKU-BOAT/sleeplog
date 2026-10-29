@@ -151,7 +151,7 @@
   <button class="sub-btn" id="exportBtn">📤 記録をファイルに書き出す</button>
   <button class="sub-btn" id="importBtn">📥 書き出したファイルから戻す</button>
   <input type="file" id="importFile" accept="application/json,.json" hidden>
-  <p class="note">機種変更のときや、万一記録が消えたときのために、ときどき書き出しておくと安心です。録音はファイルに含まれません(録音は各夜の画面の「送る」から1件ずつ書き出せます)。</p>
+  <p class="note">機種変更のときや、万一記録が消えたときのために、ときどき書き出しておくと安心です。録音はファイルに含まれません(録音は各夜の画面から、1件ずつ、またはその夜の記録とまとめて書き出せます)。</p>
 </section>
 
 <section id="detailView" class="view"></section>
@@ -554,6 +554,46 @@ async function renderClips(sessionId) {
     });
     box.appendChild(el);
   });
+  const btn = document.createElement("button");
+  btn.className = "sub-btn";
+  btn.textContent = "📤 この夜の記録と録音をまとめて書き出す";
+  btn.addEventListener("click", () => exportNight(sessionId, clips));
+  box.appendChild(btn);
+  box.insertAdjacentHTML("beforeend", `<p class="note" style="margin-top:0">録音つきで解析してもらうとき用です(約${Math.max(1, Math.round(clips.reduce((n, c) => n + c.wav.byteLength, 0) * 1.37 / 1e6))}MB)。録音は${CLIP_KEEP_DAYS}日で消えるので、それまでに書き出してください。</p>`);
+}
+
+// 1晩分の記録と録音を、1つのファイルにまとめて書き出す(録音はbase64の文字にして入れる)。
+// 「書き出したファイルから戻す」でも読めるよう、形はふつうのバックアップと同じにして clips を足す。
+function exportNight(sessionId, clips) {
+  const s = sessions.find((x) => x.id === sessionId);
+  if (!s) return;
+  const b64 = (buf) => {
+    const bytes = new Uint8Array(buf);
+    let str = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) str += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(str);
+  };
+  const data = {
+    app: "sleeplog", version: 1, sessions: [s],
+    clips: clips.map((c) => ({ id: c.id, session: c.session, t: c.t, rise: c.rise, wav: b64(c.wav) })),
+  };
+  const d = new Date(s.start);
+  if (d.getHours() < 12) d.setDate(d.getDate() - 1); // 夜の日付(nightTitle と同じ決め方)
+  const name = `SleepLog_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}の夜_録音つき.json`;
+  shareFile(new File([JSON.stringify(data)], name, { type: "application/json" }));
+}
+
+// ファイルを共有シートで送る(使えないときはダウンロード)
+async function shareFile(file) {
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch {}
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 let toastTimer;
@@ -871,20 +911,11 @@ $("#startBtn").addEventListener("click", () => {
 });
 
 // ---------- バックアップ ----------
-$("#exportBtn").addEventListener("click", async () => {
+$("#exportBtn").addEventListener("click", () => {
   if (!sessions.length) { alert("まだ記録がありません。"); return; }
   const d = new Date();
   const name = `SleepLog_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
-  const file = new File([JSON.stringify({ app: "sleeplog", version: 1, sessions })], name, { type: "application/json" });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); } catch {}
-    return;
-  }
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  shareFile(new File([JSON.stringify({ app: "sleeplog", version: 1, sessions })], name, { type: "application/json" }));
 });
 
 $("#importBtn").addEventListener("click", () => $("#importFile").click());
