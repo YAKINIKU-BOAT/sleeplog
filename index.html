@@ -98,6 +98,36 @@
   .clip .share { background: none; color: var(--accent); font-size: 13px; padding: 4px 0 4px 12px; }
   .clip audio { display: block; width: 100%; height: 36px; }
 
+  /* 朝のひとこと・要因タグ */
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 16px; }
+  .card h3 { font-size: 15px; margin: 0 0 4px; }
+  .card .k { color: var(--sub); font-size: 12px; margin: 12px 0 6px; }
+  .card .k:first-of-type { margin-top: 8px; }
+  .moods { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .moods button { background: var(--line); border-radius: 10px; padding: 8px 0 6px; font-size: 24px; line-height: 1.1; }
+  .moods button small { display: block; font-size: 10px; color: var(--sub); margin-top: 4px; }
+  .moods button.on { background: var(--accent); }
+  .moods button.on small { color: var(--text); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--line); border-radius: 16px; padding: 7px 11px; font-size: 13px; color: var(--sub); }
+  .chip.on { background: var(--accent); color: var(--text); }
+  .card input[type=text], .card textarea {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px; font: inherit; font-size: 16px; -webkit-user-select: text; user-select: text;
+  }
+  .card input[type=text] { margin-top: 6px; }
+  .card textarea { min-height: 60px; resize: vertical; }
+  .card .saved { color: var(--sub); font-size: 12px; margin-top: 8px; min-height: 1em; }
+  .item .face { font-size: 15px; margin-left: 6px; }
+  .week .stat { background: var(--bg); }
+  .week .stat .v small { display: block; font-size: 12px; font-weight: 400; color: var(--sub); margin-top: 2px; }
+  details.card summary { list-style: none; cursor: pointer; }
+  details.card summary::-webkit-details-marker { display: none; }
+  details.card summary h3 { display: flex; justify-content: space-between; margin: 0; }
+  details.card .arrow { color: var(--sub); transition: transform .2s; }
+  details.card[open] .arrow { transform: rotate(90deg); }
+  details.card .picked { color: var(--sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+
   /* 録音する・しないの切り替え */
   .switch { display: flex; align-items: center; gap: 12px; background: var(--card); border-radius: 12px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
   .switch input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; margin: 0; }
@@ -130,17 +160,22 @@
     <div class="moon">🌙</div>
     <p>寝る前に「おやすみ」を押してください</p>
   </div>
+  <details class="card" id="preTagBox">
+    <summary><h3>今夜のこと<span class="arrow">▸</span></h3><div class="picked" id="prePicked"></div></summary>
+    <p class="note" style="margin:8px 0 0">当てはまるものだけ押してください(選ばなくても始められます)。部屋のことは前の夜と同じにしてあるので、変わったところだけ直してください。朝や後からも直せます。</p>
+    <div id="preTags"></div>
+  </details>
+  <label class="switch">
+    <input type="checkbox" id="clipToggle">
+    <span>🎙️ 大きな物音のときだけ、10秒ずつ録音する<small>朝に「履歴」で聞けます。いびきか寝返りかを確かめる用です。横で寝る人がいる夜は、了解をもらってから使ってください。</small></span>
+  </label>
+  <button class="big-btn" id="startBtn">おやすみ(記録を始める)</button>
   <ul class="tips">
     <li><span>🔌</span>充電しながら、枕元に置いてください</li>
     <li><span>📱</span>記録中は画面が真っ黒になります。画面を消したり、別のアプリに切り替えたりしないでください</li>
     <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
     <li><span>💡</span>それでも画面が消えてしまうときは、「設定」→「画面表示と明るさ」→「自動ロック」を「なし」にしてください(朝に元に戻すのを忘れずに)</li>
   </ul>
-  <label class="switch">
-    <input type="checkbox" id="clipToggle">
-    <span>🎙️ 大きな物音のときだけ、10秒ずつ録音する<small>朝に「履歴」で聞けます。いびきか寝返りかを確かめる用です。横で寝る人がいる夜は、了解をもらってから使ってください。</small></span>
-  </label>
-  <button class="big-btn" id="startBtn">おやすみ(記録を始める)</button>
   <p class="note">記録は1分ごとの「物音の大きさ」の数字です。録音をオンにした夜だけ、大きな物音の前後10秒の音も残します(1晩最大60件・7日たつと自動で消えます)。どちらもこのiPhoneの中だけに保存し、外には送られません。</p>
 </section>
 
@@ -187,6 +222,10 @@ const eventsOf = (x) => (x.length > 3 ? x[SAMPLE_COL[SHOW_DB]] : x[2]);
 // 寝返りは数秒で終わるので、何分も続くのは呼吸ごとの音(いびき)とみなし、目覚めに数えず浅い眠りにする。
 // (10月29日、録音で4時台の長く続く物音がいびきだったと確かめて追加)
 const SNORE_SEC = 5, SNORE_MIN = 5;
+// 寝付いた時刻:「おやすみ」のあと、1分の物音が ONSET_SEC 秒以下の分が ONSET_MIN 分続いたら、その始まり。
+// (寝付けずに寝返りをしている間は物音が続くので、その分だけ後ろにずれる。じっと起きている時間は見分けられない)
+// 起きた時刻は「おはよう」を押した時刻のまま。
+const ONSET_SEC = 2, ONSET_MIN = 15;
 
 // 録音:直近10秒のうち2秒以上「基準+6dB」を超えたら、その前3秒・後7秒を録音する。
 // (マイクの雑音で1秒だけ超えることがあるので、1秒だけでは録らない)
@@ -194,6 +233,18 @@ const SNORE_SEC = 5, SNORE_MIN = 5;
 const CLIP_DB = 6, CLIP_HITS = 2, CLIP_PRE = 3, CLIP_POST = 7, CLIP_RATE = 8000;
 const CLIP_GAP = 5 * 60000, CLIP_MAX = 60, CLIP_SKIP = 3 * 60000, CLIP_KEEP_DAYS = 7;
 const CLIP_SETTING = "sleeplog.clips";
+
+// 朝のひとこと(10月30日〜)。各夜の記録に note として足す(どれも無いことがある。古い記録には note が無い)
+// { tags: [タグの名前], mood: 1〜5, woke: "no" | "yes", wokeAt: "3時ごろ", memo: "自由に書いた一言" }
+// タグは寝る前(「おやすみ」の上)に選び、朝や後から各夜の画面で直せる。
+// 部屋のタグは季節でほぼ決まるので、前の夜の選び方を引き継ぐ。
+const MOODS = [[1, "😩", "だるい"], [2, "😕", "ややだるい"], [3, "😐", "ふつう"], [4, "🙂", "ややすっきり"], [5, "😄", "すっきり"]];
+const TAG_GROUPS = [
+  ["寝る前", ["カフェイン(夕方以降)", "運動", "湯船につかった", "遅い夕食", "寝る前のスマホ・夜ふかし", "ストレス・考えごと", "たばこを吸わずに寝た"]],
+  ["部屋", ["横に人", "加湿器", "エアコン(冷房)", "エアコン(暖房)", "扇風機", "空気清浄機"]],
+  ["体調", ["疲れ・体調不良"]],
+];
+const ROOM_TAGS = TAG_GROUPS[1][1];
 
 // ---------- 保存 ----------
 // 記録の形:{ id, start, end, samples: [[時刻(ミリ秒), 平均の音の大きさ(dB), 物音のあった秒数], ...] }
@@ -328,9 +379,15 @@ async function recoverInProgress() {
 const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 const hm = (t) => { const d = new Date(t); return d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0"); };
 const duration = (min) => Math.floor(min / 60) + "時間" + (min % 60) + "分";
-function nightTitle(start) {
+// その記録が何日の夜か(その日の0時)
+function nightDate(start) {
   const d = new Date(start);
   if (d.getHours() < 12) d.setDate(d.getDate() - 1); // 夜中の0時を過ぎてから寝た日も、前の日の夜とする
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function nightTitle(start) {
+  const d = nightDate(start);
   return (d.getMonth() + 1) + "月" + d.getDate() + "日(" + WEEK[d.getDay()] + ")の夜";
 }
 
@@ -381,10 +438,17 @@ function analyze(s) {
   // 最後の1分は半端なことがあるので、記録した時間を超えないようにする
   const asleep = Math.min(total, points.filter((p) => p.stage !== "awake").length);
   const deep = Math.min(asleep, points.filter((p) => p.stage === "deep").length);
+  // 寝付いた時刻。いびきとみなした分も物音として数える
+  // (寝付けずに何分もゴソゴソしていると、1分ごとの数ではいびきと見分けがつかないため)
+  let onset = s.start;
+  for (let i = 0; i + ONSET_MIN <= ev.length; i++) {
+    if (ev.slice(i, i + ONSET_MIN).every((e) => e <= ONSET_SEC)) { onset = Math.max(s.start, s.samples[i][0]); break; }
+  }
   let wakes = 0;
   for (let i = 1; i < points.length; i++) if (points[i - 1].stage !== "awake" && points[i].stage === "awake") wakes++;
   return {
-    points, total, asleep, deep, wakes,
+    points, total, asleep, deep, wakes, onset,
+    latency: Math.round((onset - s.start) / 60000),
     snore: Math.min(asleep, snore.filter(Boolean).length),
     deepRatio: asleep ? deep / asleep : 0,
   };
@@ -458,6 +522,65 @@ function hourTicks(start, end, x, H) {
   return out;
 }
 
+// ---------- 寝起きの規則正しさ(この7日間) ----------
+// 1晩を1本の横棒(寝付いた時刻〜起きた時刻)にして、7日分を同じ目盛りで並べる。
+// 「おやすみ」を押してから寝付くまでは薄い色。1時間未満の記録は数えない。同じ夜に記録が2つあれば長いほう。
+const WEEK_MIN_REC = 60;
+function weekChart() {
+  const last = new Date();
+  last.setHours(0, 0, 0, 0);
+  last.setDate(last.getDate() - 1); // 昨日の夜まで
+  const days = [];
+  for (let k = 6; k >= 0; k--) { const d = new Date(last); d.setDate(d.getDate() - k); days.push(d); }
+  const nights = days.map((d) => {
+    const list = sessions.filter((s) => nightDate(s.start).getTime() === d.getTime() && s.end - s.start >= WEEK_MIN_REC * 60000);
+    if (!list.length) return null;
+    const s = list.reduce((a, b) => (b.end - b.start > a.end - a.start ? b : a));
+    return { s, onset: analyze(s).onset };
+  });
+  const got = nights.filter(Boolean);
+  if (!got.length) return "";
+  // 時刻は「その夜の18時から何分か」で扱う(0時をまたいでも並べられるように)
+  const toMin = (t, d) => (t - d.getTime()) / 60000 - 18 * 60;
+  const clock = (m) => { const x = ((Math.round(m) + 18 * 60) % 1440 + 1440) % 1440; return Math.floor(x / 60) + ":" + String(x % 60).padStart(2, "0"); };
+  const rows = nights.map((n, i) => n && { start: toMin(n.s.start, days[i]), onset: toMin(n.onset, days[i]), end: toMin(n.s.end, days[i]) });
+  const vals = rows.filter(Boolean);
+  // 目盛りは、記録のある範囲の前後を1時間単位で切りそろえる
+  const lo = Math.floor(Math.min(...vals.map((r) => r.start)) / 60) * 60;
+  const hi = Math.ceil(Math.max(...vals.map((r) => r.end)) / 60) * 60;
+  const W = 340, L = 64, R = 8, T = 4, RH = 22, H = T + RH * 7 + 18;
+  const x = (m) => L + ((m - lo) / Math.max(1, hi - lo)) * (W - L - R);
+  let svg = "";
+  const step = hi - lo > 9 * 60 ? 120 : 60;
+  for (let m = lo; m <= hi; m += 60) {
+    if ((m - lo) % step) continue;
+    svg += `<line x1="${x(m)}" x2="${x(m)}" y1="${T}" y2="${T + RH * 7}" stroke="#262b47"/>`;
+    svg += `<text x="${x(m)}" y="${H - 4}" text-anchor="middle">${clock(m).split(":")[0]}時</text>`;
+  }
+  rows.forEach((r, i) => {
+    const d = days[i], y = T + RH * i;
+    svg += `<text x="0" y="${y + 15}">${d.getMonth() + 1}/${d.getDate()}(${WEEK[d.getDay()]})</text>`;
+    if (!r) { svg += `<text x="${L + 4}" y="${y + 15}" opacity=".6">記録なし</text>`; return; }
+    if (r.onset > r.start) svg += `<rect x="${x(r.start)}" y="${y + 6}" width="${Math.max(1, x(r.onset) - x(r.start))}" height="12" rx="3" fill="#6c6cf0" opacity=".3"/>`;
+    svg += `<rect x="${x(r.onset)}" y="${y + 6}" width="${Math.max(1, x(r.end) - x(r.onset))}" height="12" rx="3" fill="#6c6cf0"/>`;
+  });
+  // 平均とばらつき(ばらつきは、平均からのずれのふつうの大きさ=標準偏差)
+  const stat = (arr) => {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const sd = Math.sqrt(arr.reduce((a, b) => a + (b - avg) * (b - avg), 0) / arr.length);
+    return clock(avg) + (arr.length >= 2 ? `<small>ばらつき ±${Math.round(sd)}分</small>` : "");
+  };
+  return `<div class="card week">
+    <h3>この7日間の寝起き</h3>
+    <div class="chart" style="padding:8px 0 0;background:none"><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
+    <div class="stats">
+      <div class="stat"><div class="k">寝付いた時刻(平均)</div><div class="v">${stat(vals.map((r) => r.onset))}</div></div>
+      <div class="stat"><div class="k">起きた時刻(平均)</div><div class="v">${stat(vals.map((r) => r.end))}</div></div>
+    </div>
+    <p class="note" style="margin:8px 0 0">${got.length}晩分。棒の薄い部分は「おやすみ」を押してから寝付くまで。ばらつきが小さいほど、毎日同じ時刻に寝起きできています。${got.length < 2 ? "ばらつきは2晩以上で出ます。" : ""}</p>
+  </div>`;
+}
+
 // ---------- 画面 ----------
 function show(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === view));
@@ -474,12 +597,12 @@ function renderList() {
     list.innerHTML = `<div class="empty">まだ記録がありません<br>「記録」タブの「おやすみ」から始めてください</div>`;
     return;
   }
-  list.innerHTML = "";
+  list.innerHTML = weekChart();
   sessions.forEach((s) => {
     const a = analyze(s);
     const el = document.createElement("button");
     el.className = "item";
-    el.innerHTML = `<div class="row"><span class="title">${nightTitle(s.start)}</span><span class="dur">${duration(a.asleep)}</span></div>
+    el.innerHTML = `<div class="row"><span class="title">${nightTitle(s.start)}${moodFace(s.note) ? `<span class="face">${moodFace(s.note)}</span>` : ""}</span><span class="dur">${duration(a.asleep)}</span></div>
       <div class="range">${hm(s.start)}〜${hm(s.end)}</div>${depthChart(a, s.start, s.end, true)}`;
     el.addEventListener("click", () => showDetail(s.id));
     list.appendChild(el);
@@ -494,9 +617,12 @@ function showDetail(id) {
     <button class="back" id="backBtn">‹ 履歴</button>
     <h1>${nightTitle(s.start)}</h1>
     <p style="color:var(--sub);margin-top:-8px">${hm(s.start)}〜${hm(s.end)}</p>
+    <div id="noteSection"></div>
     <div class="stats">
       <div class="stat"><div class="k">眠っていた時間</div><div class="v">${duration(a.asleep)}</div></div>
       <div class="stat"><div class="k">記録した時間</div><div class="v">${duration(a.total)}</div></div>
+      <div class="stat"><div class="k">寝付いた時刻</div><div class="v">${hm(a.onset)}</div></div>
+      <div class="stat"><div class="k">寝付くまで</div><div class="v">${a.latency}分</div></div>
       <div class="stat"><div class="k">深い眠りの割合</div><div class="v">${Math.round(a.deepRatio * 100)}%</div></div>
       <div class="stat"><div class="k">目覚めた回数</div><div class="v">${a.wakes}回</div></div>
       <div class="stat wide"><div class="k">いびき(物音が何分も続いた時間)</div><div class="v">${duration(a.snore)}</div></div>
@@ -519,6 +645,7 @@ function showDetail(id) {
       })
       .catch(() => alert("削除できませんでした。もう一度お試しください。"));
   });
+  renderNote(s);
   show("detailView");
   renderClips(s.id);
 }
@@ -596,6 +723,123 @@ async function shareFile(file) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------- 朝のひとこと ----------
+// タグのボタンを、まとまりごとに並べる。押すたびに onChange(選んだタグ) を呼ぶ。
+// 一覧に無いタグ(後で一覧から外したものなど)も、消さずにそのまま残す
+function tagPicker(box, selected, onChange) {
+  const sel = new Set(selected);
+  box.innerHTML = "";
+  TAG_GROUPS.forEach(([group, tags]) => {
+    box.insertAdjacentHTML("beforeend", `<div class="k">${group}</div>`);
+    const row = document.createElement("div");
+    row.className = "chips";
+    tags.forEach((t) => {
+      const b = document.createElement("button");
+      b.className = "chip" + (sel.has(t) ? " on" : "");
+      b.textContent = t;
+      b.addEventListener("click", () => {
+        if (sel.has(t)) sel.delete(t); else sel.add(t);
+        b.classList.toggle("on", sel.has(t));
+        onChange([...sel]);
+      });
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+  });
+}
+
+// 寝る前のタグ。部屋のタグだけ、タグを付けたいちばん新しい夜から引き継ぐ
+let tonightTags = [];
+function renderPreTags() {
+  const prev = sessions.find((s) => s.note && Array.isArray(s.note.tags));
+  tonightTags = prev ? prev.note.tags.filter((t) => ROOM_TAGS.includes(t)) : [];
+  const drawPicked = () => {
+    $("#prePicked").textContent = tonightTags.length ? "選択中:" + tonightTags.join("、") : "タップして開く(選ばなくても始められます)";
+  };
+  tagPicker($("#preTags"), tonightTags, (tags) => { tonightTags = tags; drawPicked(); });
+  drawPicked();
+}
+
+const moodFace = (n) => (n && MOODS[n.mood - 1] ? MOODS[n.mood - 1][1] : "");
+
+// 各夜の画面の「朝のひとこと」。変えるたびに、その夜の記録に保存する
+function renderNote(s) {
+  const box = $("#noteSection");
+  const n = Object.assign({ tags: [] }, s.note);
+  box.innerHTML = `<div class="card">
+    <h3>☀️ 朝のひとこと</h3>
+    <div class="k">起きたときの感じ</div><div class="moods"></div>
+    <div class="k">夜中に起きた覚え</div><div class="chips woke"></div>
+    <input type="text" class="wokeAt" placeholder="だいたいの時刻(例:3時ごろ)。分からなければ空のまま">
+    <div class="tags"></div>
+    <div class="k">一言メモ</div>
+    <textarea class="memo" placeholder="タグに無いことなど、自由に"></textarea>
+    <div class="saved"></div>
+  </div>`;
+  const card = box.firstElementChild, saved = card.querySelector(".saved");
+  const save = () => {
+    ["wokeAt", "memo"].forEach((k) => { if (!n[k]) delete n[k]; });
+    s.note = n;
+    writeDB([s])
+      .then(() => { saved.textContent = "✓ 保存しました"; })
+      .catch(() => { saved.textContent = "保存できませんでした。もう一度お試しください。"; });
+  };
+
+  const moods = card.querySelector(".moods");
+  MOODS.forEach(([v, face, label]) => {
+    const b = document.createElement("button");
+    b.innerHTML = `${face}<small>${label}</small>`;
+    b.addEventListener("click", () => {
+      if (n.mood === v) delete n.mood; else n.mood = v; // もう一度押すと取り消し
+      drawMoods();
+      save();
+    });
+    moods.appendChild(b);
+  });
+  const drawMoods = () => [...moods.children].forEach((b, i) => b.classList.toggle("on", n.mood === i + 1));
+
+  const woke = card.querySelector(".woke"), wokeAt = card.querySelector(".wokeAt");
+  [["no", "なし"], ["yes", "あり"]].forEach(([v, label]) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      if (n.woke === v) delete n.woke; else n.woke = v;
+      drawWoke();
+      save();
+    });
+    woke.appendChild(b);
+  });
+  const drawWoke = () => {
+    [...woke.children].forEach((b, i) => b.classList.toggle("on", n.woke === (i ? "yes" : "no")));
+    wokeAt.style.display = n.woke === "yes" ? "block" : "none";
+  };
+
+  tagPicker(card.querySelector(".tags"), n.tags, (tags) => {
+    n.tags = tags;
+    save();
+    renderPreTags(); // 部屋のタグを直したら、次の夜の引き継ぎにも使う
+  });
+
+  // 文字は打ち終わってから保存する(1文字ごとには保存しない)
+  const memo = card.querySelector(".memo");
+  [[wokeAt, "wokeAt"], [memo, "memo"]].forEach(([el, k]) => {
+    el.value = n[k] || "";
+    let timer;
+    const commit = () => {
+      clearTimeout(timer);
+      const v = el.value.trim();
+      if (v === (n[k] || "")) return;
+      n[k] = v;
+      save();
+    };
+    el.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(commit, 800); });
+    el.addEventListener("change", commit);
+  });
+  drawMoods();
+  drawWoke();
+}
+
 let toastTimer;
 function toast(msg) {
   const t = $("#toast");
@@ -633,7 +877,7 @@ async function startRecording() {
     id: String(now), start: now, samples: [], recent: [], lastTick: now,
     sec: { start: now, sum: 0, n: 0, peak: -160 },
     min: { start: now, levels: [], events: THRESHOLDS.map(() => 0) },
-    clipper: null,
+    clipper: null, note: { tags: [...tonightTags] },
   });
   if ($("#clipToggle").checked) startClipper(ctx, source);
   rec.timer = setInterval(tick, 80);
@@ -694,7 +938,7 @@ function pushMinute() {
   THRESHOLDS.forEach((d, k) => { row[SAMPLE_COL[d]] = m.events[k]; });
   rec.samples.push(row);
   // ページが閉じても残るよう、1分ごとに途中保存
-  saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples });
+  saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note });
 }
 
 function saveProgress(s) {
@@ -816,12 +1060,13 @@ function stopRecording() {
     alert("記録が1分未満だったため、保存しませんでした。");
     return;
   }
-  const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples };
+  const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note };
   // 保存に成功するまでは途中保存を消さない(失敗しても、次に開いたときに戻せる)
   saveProgress(s);
   addSession(s)
     .then(() => {
       localStorage.removeItem(PROGRESS_KEY);
+      renderPreTags(); // 次の夜のために、寝る前のタグを選び直せる状態に戻す
       showDetail(s.id);
       const c = rec.clipper;
       if (c && c.failed) toast(`録音${c.failed}件を保存できませんでした(物音の記録は保存済みです)。`);
@@ -963,7 +1208,9 @@ function makeDemo() {
       samples.push([start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10,
         Math.floor(e / 2), e + 2, e, Math.floor(e * 0.7)]);
     }
-    out.push({ id: "demo" + k, start, end: start + minutes * 60000, samples });
+    const note = k === 1 ? { tags: ["運動", "加湿器"] }
+      : { tags: k === 2 ? ["カフェイン(夕方以降)", "加湿器"] : ["湯船につかった", "加湿器", "横に人"], mood: k === 2 ? 2 : 4, woke: k === 2 ? "yes" : "no", ...(k === 2 ? { wokeAt: "3時ごろ" } : {}) };
+    out.push({ id: "demo" + k, start, end: start + minutes * 60000, samples, note });
   }
   return out;
 }
@@ -973,7 +1220,10 @@ initStorage()
   .then(() => (DEMO ? null : recoverInProgress()))
   .then(() => { if (!DEMO) pruneOldClips().catch(() => {}); })
   .catch(() => alert("記録の保存場所を開けませんでした。プライベートブラウズになっていないか確認してください。"))
-  .then(() => { if ($("#historyView").classList.contains("on")) renderList(); });
+  .then(() => {
+    renderPreTags();
+    if ($("#historyView").classList.contains("on")) renderList();
+  });
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 </script>
 </body>
