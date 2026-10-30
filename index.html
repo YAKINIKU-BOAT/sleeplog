@@ -117,7 +117,8 @@
   }
   .card input[type=text] { margin-top: 6px; }
   .card textarea { min-height: 60px; resize: vertical; }
-  .card .saved { color: var(--sub); font-size: 12px; margin-top: 8px; min-height: 1em; }
+  .card .save-btn { margin-top: 14px; padding: 14px; font-size: 16px; background: var(--line); color: var(--sub); }
+  .card .save-btn.dirty { background: var(--accent); color: var(--text); }
   .item .face { font-size: 15px; margin-left: 6px; }
   .week .stat { background: var(--bg); }
   .week .stat .v small { display: block; font-size: 12px; font-weight: 400; color: var(--sub); margin-top: 2px; }
@@ -583,6 +584,11 @@ function weekChart() {
 
 // ---------- 画面 ----------
 function show(view) {
+  // 朝のひとことを保存しないまま、各夜の画面から移ろうとしたら確かめる
+  if (noteDirty && view !== "detailView" && $("#detailView").classList.contains("on")) {
+    if (!confirm("朝のひとことを保存していません。保存せずに移りますか？")) return;
+    noteDirty = false;
+  }
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === view));
   document.querySelectorAll("nav button").forEach((b) =>
     b.classList.toggle("on", b.dataset.tab === view || (view === "detailView" && b.dataset.tab === "historyView")));
@@ -641,6 +647,7 @@ function showDetail(id) {
       .then(() => {
         sessions = sessions.filter((x) => x.id !== s.id);
         deleteClipsOf(s.id).catch(() => {});
+        noteDirty = false;
         show("historyView");
       })
       .catch(() => alert("削除できませんでした。もう一度お試しください。"));
@@ -762,10 +769,13 @@ function renderPreTags() {
 
 const moodFace = (n) => (n && MOODS[n.mood - 1] ? MOODS[n.mood - 1][1] : "");
 
-// 各夜の画面の「朝のひとこと」。変えるたびに、その夜の記録に保存する
+// 各夜の画面の「朝のひとこと」。「保存する」を押したときに、その夜の記録に保存する
+// (保存していない変更があるうちは noteDirty が true。画面を移るときに確かめる)
+let noteDirty = false;
 function renderNote(s) {
+  noteDirty = false;
   const box = $("#noteSection");
-  const n = Object.assign({ tags: [] }, s.note);
+  const n = Object.assign({ tags: [] }, s.note); // 保存するまでは、この写しだけを変える
   box.innerHTML = `<div class="card">
     <h3>☀️ 朝のひとこと</h3>
     <div class="k">起きたときの感じ</div><div class="moods"></div>
@@ -774,16 +784,35 @@ function renderNote(s) {
     <div class="tags"></div>
     <div class="k">一言メモ</div>
     <textarea class="memo" placeholder="タグに無いことなど、自由に"></textarea>
-    <div class="saved"></div>
+    <button class="big-btn save-btn"></button>
   </div>`;
-  const card = box.firstElementChild, saved = card.querySelector(".saved");
-  const save = () => {
-    ["wokeAt", "memo"].forEach((k) => { if (!n[k]) delete n[k]; });
-    s.note = n;
-    writeDB([s])
-      .then(() => { saved.textContent = "✓ 保存しました"; })
-      .catch(() => { saved.textContent = "保存できませんでした。もう一度お試しください。"; });
+  const card = box.firstElementChild, btn = card.querySelector(".save-btn");
+  const wokeAt = card.querySelector(".wokeAt"), memo = card.querySelector(".memo");
+  const drawBtn = (msg) => {
+    btn.disabled = !noteDirty;
+    btn.classList.toggle("dirty", noteDirty);
+    btn.textContent = noteDirty ? "保存する" : msg || (s.note && s.note.saved ? "✓ 保存済み(" + hm(s.note.saved) + ")" : "保存する");
   };
+  const changed = () => { noteDirty = true; drawBtn(); };
+
+  btn.addEventListener("click", () => {
+    const out = Object.assign({}, n, { tags: [...n.tags], wokeAt: wokeAt.value.trim(), memo: memo.value.trim(), saved: Date.now() });
+    ["wokeAt", "memo"].forEach((k) => { if (!out[k]) delete out[k]; });
+    const before = s.note;
+    s.note = out;
+    btn.disabled = true;
+    writeDB([s])
+      .then(() => {
+        noteDirty = false;
+        drawBtn("✓ 保存しました(" + hm(out.saved) + ")");
+        renderPreTags(); // 部屋のタグを直したら、次の夜の引き継ぎにも使う
+      })
+      .catch(() => {
+        s.note = before;
+        drawBtn();
+        alert("保存できませんでした。もう一度「保存する」を押してください。");
+      });
+  });
 
   const moods = card.querySelector(".moods");
   MOODS.forEach(([v, face, label]) => {
@@ -792,13 +821,13 @@ function renderNote(s) {
     b.addEventListener("click", () => {
       if (n.mood === v) delete n.mood; else n.mood = v; // もう一度押すと取り消し
       drawMoods();
-      save();
+      changed();
     });
     moods.appendChild(b);
   });
   const drawMoods = () => [...moods.children].forEach((b, i) => b.classList.toggle("on", n.mood === i + 1));
 
-  const woke = card.querySelector(".woke"), wokeAt = card.querySelector(".wokeAt");
+  const woke = card.querySelector(".woke");
   [["no", "なし"], ["yes", "あり"]].forEach(([v, label]) => {
     const b = document.createElement("button");
     b.className = "chip";
@@ -806,7 +835,7 @@ function renderNote(s) {
     b.addEventListener("click", () => {
       if (n.woke === v) delete n.woke; else n.woke = v;
       drawWoke();
-      save();
+      changed();
     });
     woke.appendChild(b);
   });
@@ -815,29 +844,14 @@ function renderNote(s) {
     wokeAt.style.display = n.woke === "yes" ? "block" : "none";
   };
 
-  tagPicker(card.querySelector(".tags"), n.tags, (tags) => {
-    n.tags = tags;
-    save();
-    renderPreTags(); // 部屋のタグを直したら、次の夜の引き継ぎにも使う
-  });
+  tagPicker(card.querySelector(".tags"), n.tags, (tags) => { n.tags = tags; changed(); });
 
-  // 文字は打ち終わってから保存する(1文字ごとには保存しない)
-  const memo = card.querySelector(".memo");
-  [[wokeAt, "wokeAt"], [memo, "memo"]].forEach(([el, k]) => {
-    el.value = n[k] || "";
-    let timer;
-    const commit = () => {
-      clearTimeout(timer);
-      const v = el.value.trim();
-      if (v === (n[k] || "")) return;
-      n[k] = v;
-      save();
-    };
-    el.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(commit, 800); });
-    el.addEventListener("change", commit);
-  });
+  wokeAt.value = n.wokeAt || "";
+  memo.value = n.memo || "";
+  [wokeAt, memo].forEach((el) => el.addEventListener("input", changed));
   drawMoods();
   drawWoke();
+  drawBtn();
 }
 
 let toastTimer;
