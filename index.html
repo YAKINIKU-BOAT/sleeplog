@@ -211,11 +211,12 @@ const $ = (s) => document.querySelector(s);
 const KEY = "sleeplog.sessions";
 const PROGRESS_KEY = "sleeplog.inprogress";
 const DEMO = new URLSearchParams(location.search).has("demo");
-// 「物音あり」とみなす大きさ(部屋の静かなときより何dB大きいか)。4段階すべてで数えて記録する。
-// 1分ごとの記録は [時刻, 音の大きさ, +10dBの秒数, +4dBの秒数, +6dBの秒数, +8dBの秒数]
-// (10月26日より前の記録は、最初の3つだけ)
-const THRESHOLDS = [4, 6, 8, 10];
-const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5 };
+// 「物音あり」とみなす大きさ(部屋の静かなときより何dB大きいか)。すべての段階で数えて記録する。
+// 1分ごとの記録は [時刻, 音の大きさ, +10dBの秒数, +4dBの秒数, +6dBの秒数, +8dBの秒数, +15dBの秒数, +20dBの秒数]
+// (10月26日より前の記録は最初の3つだけ、11月1日より前の記録は最初の6つだけ)
+// +15・+20dBは、目覚めの寝返り(録音で17〜33dB)といびき(最大15dBほど)を分けられるか確かめるため(11月1日に追加。推定にはまだ使わない)
+const THRESHOLDS = [4, 6, 8, 10, 15, 20];
+const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5, 15: 6, 20: 7 };
 // 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
 const SHOW_DB = 6;
 const eventsOf = (x) => (x.length > 3 ? x[SAMPLE_COL[SHOW_DB]] : x[2]);
