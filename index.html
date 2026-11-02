@@ -70,6 +70,17 @@
   }
   #holdBtn .fill { position: absolute; inset: 0; width: 0; background: #3a2a14; z-index: -1; }
   #holdBtn span { position: relative; }
+  /* 夜中に目が覚めたときのボタン(まぶしくないよう暗め。「おはよう」とは離して上のほうに置く) */
+  #wakeBtn {
+    position: absolute; top: calc(40px + env(safe-area-inset-top)); left: 24px; right: 24px;
+    padding: 22px; border-radius: 16px; background: #0d0f1c; color: #4a4e6c; font-size: 16px;
+  }
+  #wakeMsg { color: #4a4e6c; font-size: 14px; min-height: 20px; font-variant-numeric: tabular-nums; }
+
+  /* 夜中に「目が覚めた」を押した時刻 */
+  .taps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .taps .chip { display: flex; align-items: center; gap: 6px; color: var(--text); font-variant-numeric: tabular-nums; }
+  .taps .chip span { color: var(--sub); font-size: 12px; }
 
   /* 履歴 */
   .item { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; display: block; width: 100%; text-align: left; }
@@ -174,6 +185,7 @@
   <ul class="tips">
     <li><span>🔌</span>充電しながら、枕元に置いてください</li>
     <li><span>📱</span>記録中は画面が真っ黒になります。画面を消したり、別のアプリに切り替えたりしないでください</li>
+    <li><span>🔔</span>夜中に目が覚めたら、画面の上の「目が覚めた」をタップしてください。時刻が残ります(押し間違いは朝に消せます)</li>
     <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
     <li><span>💡</span>それでも画面が消えてしまうときは、「設定」→「画面表示と明るさ」→「自動ロック」を「なし」にしてください(朝に元に戻すのを忘れずに)</li>
   </ul>
@@ -193,9 +205,11 @@
 <section id="detailView" class="view"></section>
 
 <div id="night">
+  <button id="wakeBtn">目が覚めた(タップで時刻を残す)</button>
   <div class="clock" id="clock">0:00</div>
   <div class="elapsed" id="elapsed"></div>
   <div class="meter"><div id="meter"></div></div>
+  <div id="wakeMsg"></div>
   <div class="warn" id="warn">マイクが止まっています。<br>画面をタップすると再開します。</div>
   <button id="holdBtn"><div class="fill" id="holdFill"></div><span>長押しで「おはよう」(記録を終える)</span></button>
 </div>
@@ -241,6 +255,10 @@ const CLIP_SETTING = "sleeplog.clips";
 // カチッ:高い音だけ取り出して(前後の差)、5ミリ秒ごとの強さが直前0.1秒の真ん中の強さより CLICK_DB 以上跳ね上がった所。
 // 続けて数えないよう、数えたあと20ミリ秒はあける
 const CLICK_DB = 15, CLICK_STEP = 40, CLICK_PREV = 20, CLICK_REST = 4, CLICK_WIN = 10 * CLIP_RATE;
+
+// 夜中に「目が覚めた」を押した時刻(11月2日〜)。各夜の記録に wakeTaps: [時刻] として足す(押さなかった夜・古い記録には無い)。
+// 目覚めの判定を確かめるときの正解に使う。寝ぼけて続けて押しても1回にするため、前に押してから WAKE_TAP_GAP 以内は数えない
+const WAKE_TAP_GAP = 60000;
 
 // 朝のひとこと(10月30日〜)。各夜の記録に note として足す(どれも無いことがある。古い記録には note が無い)
 // { tags: [タグの名前], mood: 1〜5, woke: "no" | "yes", wokeAt: "3時ごろ", memo: "自由に書いた一言" }
@@ -455,7 +473,7 @@ function analyze(s) {
   let wakes = 0;
   for (let i = 1; i < points.length; i++) if (points[i - 1].stage !== "awake" && points[i].stage === "awake") wakes++;
   return {
-    points, total, asleep, deep, wakes, onset,
+    points, total, asleep, deep, wakes, onset, taps: s.wakeTaps || [],
     latency: Math.round((onset - s.start) / 60000),
     snore: Math.min(asleep, snore.filter(Boolean).length),
     deepRatio: asleep ? deep / asleep : 0,
@@ -490,6 +508,15 @@ function depthChart(a, start, end, compact) {
       snore += `<rect x="${x(p.t).toFixed(1)}" y="${y(0) - 4}" width="${Math.max(0.5, x(t2) - x(p.t)).toFixed(1)}" height="4" fill="#3fb6a0"/>`;
     });
   }
+  // 夜中に「目が覚めた」を押した時刻を、上に▼と縦の点線で示す
+  let taps = "";
+  if (!compact) {
+    a.taps.forEach((t) => {
+      const tx = x(t).toFixed(1);
+      taps += `<line x1="${tx}" x2="${tx}" y1="${T + 6}" y2="${y(0)}" stroke="#e8e8f0" stroke-width="1" stroke-dasharray="2 2" opacity=".7"/>`;
+      taps += `<path d="M${tx} ${T + 6} l-4 -6 h8 z" fill="#e8e8f0"/>`;
+    });
+  }
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
     <defs><linearGradient id="${id}" x1="0" y1="1" x2="0" y2="0">
       <stop offset="0" stop-color="#5b5bd6"/><stop offset=".55" stop-color="#9a6fd8"/><stop offset="1" stop-color="#f0a04b"/>
@@ -497,6 +524,7 @@ function depthChart(a, start, end, compact) {
     ${grid}
     <path d="${area}" fill="url(#${id})" opacity=".9"/>
     ${snore}
+    ${taps}
   </svg>`;
 }
 
@@ -631,6 +659,7 @@ function showDetail(id) {
     <h1>${nightTitle(s.start)}</h1>
     <p style="color:var(--sub);margin-top:-8px">${hm(s.start)}〜${hm(s.end)}</p>
     <div id="noteSection"></div>
+    <div id="tapSection"></div>
     <div class="stats">
       <div class="stat"><div class="k">眠っていた時間</div><div class="v">${duration(a.asleep)}</div></div>
       <div class="stat"><div class="k">記録した時間</div><div class="v">${duration(a.total)}</div></div>
@@ -660,8 +689,43 @@ function showDetail(id) {
       .catch(() => alert("削除できませんでした。もう一度お試しください。"));
   });
   renderNote(s);
+  renderTaps(s);
   show("detailView");
   renderClips(s.id);
+}
+
+// 夜中に「目が覚めた」を押した時刻を並べる(押さなかった夜は何も出さない)。押し間違いは × で消せる
+function renderTaps(s) {
+  const box = $("#tapSection");
+  const taps = s.wakeTaps || [];
+  if (!taps.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="card">
+    <h3>🔔 夜中に「目が覚めた」を押した時刻</h3>
+    <div class="taps"></div>
+    <p class="note" style="margin-top:8px">グラフの上の▼の位置です。押し間違いは × で消せます。</p>
+  </div>`;
+  const row = box.querySelector(".taps");
+  taps.forEach((t) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.innerHTML = `${hm(t)}<span>×</span>`;
+    b.addEventListener("click", () => {
+      if (!confirm(hm(t) + " の記録を消します。よろしいですか？")) return;
+      const before = s.wakeTaps;
+      s.wakeTaps = before.filter((x) => x !== t);
+      if (!s.wakeTaps.length) delete s.wakeTaps;
+      writeDB([s])
+        .then(() => {
+          if (noteDirty) renderTaps(s); // 朝のひとことを書きかけのときは、そちらを消さないよう時刻の欄だけ直す
+          else showDetail(s.id);
+        })
+        .catch(() => {
+          s.wakeTaps = before;
+          alert("消せませんでした。もう一度お試しください。");
+        });
+    });
+    row.appendChild(b);
+  });
 }
 
 // その夜の録音を一覧にする(録音が無い夜は何も出さない)
@@ -898,8 +962,9 @@ async function startRecording() {
     id: String(now), start: now, samples: [], recent: [], lastTick: now,
     sec: { start: now, sum: 0, n: 0, peak: -160 },
     min: { start: now, levels: [], events: THRESHOLDS.map(() => 0) },
-    clipper: null, note: { tags: [...tonightTags] },
+    clipper: null, note: { tags: [...tonightTags] }, wakeTaps: [],
   });
+  $("#wakeMsg").textContent = "";
   // カチッを数えるため、録音がオフでも音の取り込みは動かす(録音はしない)
   startClipper(ctx, source, $("#clipToggle").checked);
   rec.timer = setInterval(tick, 80);
@@ -965,7 +1030,13 @@ function pushMinute() {
   }
   rec.samples.push(row);
   // ページが閉じても残るよう、1分ごとに途中保存
-  saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note });
+  saveProgress(currentSession());
+}
+
+function currentSession() {
+  const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note };
+  if (rec.wakeTaps.length) s.wakeTaps = [...rec.wakeTaps];
+  return s;
 }
 
 function saveProgress(s) {
@@ -1115,7 +1186,7 @@ function stopRecording() {
     alert("記録が1分未満だったため、保存しませんでした。");
     return;
   }
-  const s = { id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note };
+  const s = currentSession();
   // 保存に成功するまでは途中保存を消さない(失敗しても、次に開いたときに戻せる)
   saveProgress(s);
   addSession(s)
@@ -1176,6 +1247,24 @@ $("#night").addEventListener("click", () => {
   if (!rec.on) return;
   rec.ctx.resume().catch(() => {});
   startAwakeVideo();
+});
+
+// 夜中に目が覚めたら1回タップ。時刻を残し、すぐ途中保存する(ページが閉じても残るように)
+let wakeMsgTimer;
+$("#wakeBtn").addEventListener("click", () => {
+  if (!rec.on) return;
+  const now = Date.now(), last = rec.wakeTaps[rec.wakeTaps.length - 1];
+  let msg;
+  if (last && now - last < WAKE_TAP_GAP) {
+    msg = hm(last) + " に記録済みです";
+  } else {
+    rec.wakeTaps.push(now);
+    saveProgress(currentSession());
+    msg = hm(now) + " 記録しました。おやすみなさい";
+  }
+  $("#wakeMsg").textContent = msg;
+  clearTimeout(wakeMsgTimer);
+  wakeMsgTimer = setTimeout(() => { $("#wakeMsg").textContent = ""; }, 5000);
 });
 
 // 寝ぼけて止めないよう、長押し(1.5秒)で終了
