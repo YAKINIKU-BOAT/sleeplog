@@ -61,7 +61,7 @@
   #night .clock { font-size: 64px; font-weight: 200; color: #3a3d55; font-variant-numeric: tabular-nums; }
   #night .elapsed { color: #33364a; font-size: 15px; font-variant-numeric: tabular-nums; }
   #night .meter { width: 160px; height: 4px; background: #15172a; border-radius: 2px; overflow: hidden; margin-top: 8px; }
-  #night .meter div { height: 100%; width: 0; background: #4a3a20; transition: width .3s; }
+  #night .meter span { display: block; height: 100%; width: 0; background: #4a3a20; transition: width .3s; }
   #night .warn { color: #a05a40; font-size: 14px; text-align: center; display: none; }
   #holdBtn {
     position: absolute; bottom: calc(40px + env(safe-area-inset-bottom)); left: 24px; right: 24px;
@@ -70,12 +70,16 @@
   }
   #holdBtn .fill { position: absolute; inset: 0; width: 0; background: #3a2a14; z-index: -1; }
   #holdBtn span { position: relative; }
-  /* 夜中に目が覚めたときのボタン(まぶしくないよう暗め。「おはよう」とは離して上のほうに置く) */
+  /* 夜中に目が覚めたときのボタン。寝ぼけていても押せるよう、時計ごと大きなボタンにする
+     (まぶしくないよう暗め。「おはよう」の長押しとは離して画面の真ん中に置く) */
   #wakeBtn {
-    position: absolute; top: calc(40px + env(safe-area-inset-top)); left: 24px; right: 24px;
-    padding: 22px; border-radius: 16px; background: #0d0f1c; color: #4a4e6c; font-size: 16px;
+    width: min(300px, 100%); padding: 28px 16px 22px; border-radius: 24px; background: #0b0d18;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
   }
-  #wakeMsg { color: #4a4e6c; font-size: 14px; min-height: 20px; font-variant-numeric: tabular-nums; }
+  #wakeBtn:active { background: #15182a; }
+  #wakeBtn > span { display: block; }
+  #wakeBtn .wake-label { color: #4a4e6c; font-size: 15px; margin-top: 4px; }
+  #wakeMsg { color: #6a6e8c; font-size: 14px; min-height: 20px; font-variant-numeric: tabular-nums; }
 
   /* 夜中に「目が覚めた」を押した時刻 */
   .taps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -185,7 +189,7 @@
   <ul class="tips">
     <li><span>🔌</span>充電しながら、枕元に置いてください</li>
     <li><span>📱</span>記録中は画面が真っ黒になります。画面を消したり、別のアプリに切り替えたりしないでください</li>
-    <li><span>🔔</span>夜中に目が覚めたら、画面の上の「目が覚めた」をタップしてください。時刻が残ります(押し間違いは朝に消せます)</li>
+    <li><span>🔔</span>夜中に目が覚めたら、画面の真ん中(時計のあたり)をタップしてください。時刻が残ります(押し間違いは朝に消せます)</li>
     <li><span>☀️</span>起きたら「おはよう」を長押しすると記録が残ります</li>
     <li><span>💡</span>それでも画面が消えてしまうときは、「設定」→「画面表示と明るさ」→「自動ロック」を「なし」にしてください(朝に元に戻すのを忘れずに)</li>
   </ul>
@@ -205,10 +209,12 @@
 <section id="detailView" class="view"></section>
 
 <div id="night">
-  <button id="wakeBtn">目が覚めた(タップで時刻を残す)</button>
-  <div class="clock" id="clock">0:00</div>
-  <div class="elapsed" id="elapsed"></div>
-  <div class="meter"><div id="meter"></div></div>
+  <button id="wakeBtn">
+    <span class="clock" id="clock">0:00</span>
+    <span class="elapsed" id="elapsed"></span>
+    <span class="meter"><span id="meter"></span></span>
+    <span class="wake-label">目が覚めたら、ここをタップ</span>
+  </button>
   <div id="wakeMsg"></div>
   <div class="warn" id="warn">マイクが止まっています。<br>画面をタップすると再開します。</div>
   <button id="holdBtn"><div class="fill" id="holdFill"></div><span>長押しで「おはよう」(記録を終える)</span></button>
