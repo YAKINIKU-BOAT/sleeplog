@@ -213,8 +213,11 @@ const PROGRESS_KEY = "sleeplog.inprogress";
 const DEMO = new URLSearchParams(location.search).has("demo");
 // 「物音あり」とみなす大きさ(部屋の静かなときより何dB大きいか)。すべての段階で数えて記録する。
 // 1分ごとの記録は [時刻, 音の大きさ, +10dBの秒数, +4dBの秒数, +6dBの秒数, +8dBの秒数, +15dBの秒数, +20dBの秒数]
-// (10月26日より前の記録は最初の3つだけ、11月1日より前の記録は最初の6つだけ)
+//   のあとに [カチッの数, 10秒の中で一番多かったカチッの数](11月2日〜。録音の準備ができなかった夜は無い)
+// (10月26日より前の記録は最初の3つだけ、11月1日より前の記録は最初の6つだけ、11月2日より前の記録は最初の8つだけ)
 // +15・+20dBは、目覚めの寝返り(録音で17〜33dB)といびき(最大15dBほど)を分けられるか確かめるため(11月1日に追加。推定にはまだ使わない)
+// カチッは歯ぎしりの手がかり。10秒の録音で8回以上なら歯ぎしりの候補(4晩の録音で歯ぎしり8件中8件。大きな寝返り・起きた時も拾う)。
+// 解析ツールの clicks.py と同じ数え方(11月2日に追加。画面にはまだ出さない)
 const THRESHOLDS = [4, 6, 8, 10, 15, 20];
 const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5, 15: 6, 20: 7 };
 // 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
@@ -235,6 +238,9 @@ const ONSET_SEC = 2, ONSET_MIN = 15;
 const CLIP_DB = 6, CLIP_HITS = 2, CLIP_PRE = 3, CLIP_POST = 7, CLIP_RATE = 8000;
 const CLIP_GAP = 5 * 60000, CLIP_MAX = 60, CLIP_SKIP = 3 * 60000, CLIP_KEEP_DAYS = 7;
 const CLIP_SETTING = "sleeplog.clips";
+// カチッ:高い音だけ取り出して(前後の差)、5ミリ秒ごとの強さが直前0.1秒の真ん中の強さより CLICK_DB 以上跳ね上がった所。
+// 続けて数えないよう、数えたあと20ミリ秒はあける
+const CLICK_DB = 15, CLICK_STEP = 40, CLICK_PREV = 20, CLICK_REST = 4, CLICK_WIN = 10 * CLIP_RATE;
 
 // 朝のひとこと(10月30日〜)。各夜の記録に note として足す(どれも無いことがある。古い記録には note が無い)
 // { tags: [タグの名前], mood: 1〜5, woke: "no" | "yes", wokeAt: "3時ごろ", memo: "自由に書いた一言" }
@@ -894,7 +900,8 @@ async function startRecording() {
     min: { start: now, levels: [], events: THRESHOLDS.map(() => 0) },
     clipper: null, note: { tags: [...tonightTags] },
   });
-  if ($("#clipToggle").checked) startClipper(ctx, source);
+  // カチッを数えるため、録音がオフでも音の取り込みは動かす(録音はしない)
+  startClipper(ctx, source, $("#clipToggle").checked);
   rec.timer = setInterval(tick, 80);
   rec.clockTimer = setInterval(drawClock, 1000);
   drawClock();
@@ -951,6 +958,11 @@ function pushMinute() {
   const level = m.levels.reduce((a, b) => a + b, 0) / m.levels.length;
   const row = [m.start, Math.round(level * 10) / 10];
   THRESHOLDS.forEach((d, k) => { row[SAMPLE_COL[d]] = m.events[k]; });
+  const c = rec.clipper;
+  if (c) {
+    row.push(c.clickN, c.clickMax);
+    c.clickN = 0; c.clickMax = 0;
+  }
   rec.samples.push(row);
   // ページが閉じても残るよう、1分ごとに途中保存
   saveProgress({ id: rec.id, start: rec.start, end: Date.now(), samples: rec.samples, note: rec.note });
@@ -964,7 +976,8 @@ function saveProgress(s) {
 // ---------- 録音 ----------
 // マイクの音を1秒に8000回の細かさに落として、直近3秒分をいつも手元に持っておく。
 // 大きな物音がしたら、手元の3秒にその後の7秒をつなげて、10秒の録音として保存する。
-function startClipper(ctx, source) {
+// あわせて、8000回の細かさの音でカチッを数える(録音がオフでも数える)。
+function startClipper(ctx, source, record) {
   try {
     const node = ctx.createScriptProcessor(4096, 1, 1);
     const mute = ctx.createGain();
@@ -974,11 +987,38 @@ function startClipper(ctx, source) {
     mute.connect(ctx.destination);
     const c = {
       node, mute, ring: new Float32Array(CLIP_RATE * CLIP_PRE), pos: 0, filled: 0,
-      cur: null, count: 0, saved: 0, failed: 0, last: -Infinity, hits: [],
+      cur: null, count: 0, saved: 0, failed: 0, last: -Infinity, hits: [], record,
+      clickN: 0, clickMax: 0,
     };
     const ratio = ctx.sampleRate / CLIP_RATE;
     let acc = 0, accN = 0, step = 0;
+    // カチッを数えるための途中の値
+    let prevV = null, eSum = 0, eN = 0, blocks = [], sinceClick = Infinity, n = 0;
+    const clickTimes = [];
+    const countClick = (v) => {
+      if (prevV === null) { prevV = v; return; }
+      const h = v - prevV;
+      prevV = v;
+      n++;
+      eSum += h * h; eN++;
+      if (eN < CLICK_STEP) return;
+      const e = 10 * Math.log10(eSum / CLICK_STEP + 1e-20);
+      eSum = 0; eN = 0; sinceClick++;
+      if (blocks.length >= CLICK_PREV) {
+        const mid = [...blocks].sort((a, b) => a - b)[CLICK_PREV / 2];
+        if (e - mid >= CLICK_DB && sinceClick > CLICK_REST) {
+          sinceClick = 0;
+          clickTimes.push(n);
+          while (n - clickTimes[0] > CLICK_WIN) clickTimes.shift();
+          c.clickN++;
+          c.clickMax = Math.max(c.clickMax, clickTimes.length);
+        }
+        blocks.shift();
+      }
+      blocks.push(e);
+    };
     const push = (v) => {
+      try { countClick(v); } catch {}
       c.ring[c.pos] = v;
       c.pos = (c.pos + 1) % c.ring.length;
       c.filled = Math.min(c.ring.length, c.filled + 1);
@@ -1004,7 +1044,7 @@ function startClipper(ctx, source) {
 
 function maybeClip(now, rise) {
   const c = rec.clipper;
-  if (!c) return;
+  if (!c || !c.record) return;
   c.hits.push(now);
   c.hits = c.hits.filter((t) => now - t <= 10000);
   if (c.cur || c.hits.length < CLIP_HITS || c.count >= CLIP_MAX) return;
@@ -1093,7 +1133,7 @@ function drawClock() {
   const now = Date.now();
   $("#clock").textContent = hm(now);
   const m = Math.floor((now - rec.start) / 60000);
-  $("#elapsed").textContent = "記録中 " + duration(m) + (rec.clipper ? " ・ 録音" + rec.clipper.count + "件" : "");
+  $("#elapsed").textContent = "記録中 " + duration(m) + (rec.clipper && rec.clipper.record ? " ・ 録音" + rec.clipper.count + "件" : "");
 }
 
 // 画面が自動で消えないようにする。
