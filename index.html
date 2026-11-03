@@ -102,6 +102,7 @@
   .stat.wide { grid-column: 1 / -1; }
   .stat .k { color: var(--sub); font-size: 12px; }
   .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .v small { display: block; font-size: 12px; font-weight: 400; color: var(--sub); margin-top: 2px; }
   .chart { background: var(--card); border-radius: 14px; padding: 12px 8px 4px; }
   .chart svg { display: block; width: 100%; height: auto; }
   .chart text { fill: var(--sub); font-size: 10px; }
@@ -237,7 +238,7 @@ const DEMO = new URLSearchParams(location.search).has("demo");
 // (10月26日より前の記録は最初の3つだけ、11月1日より前の記録は最初の6つだけ、11月2日より前の記録は最初の8つだけ)
 // +15・+20dBは、目覚めの寝返り(録音で17〜33dB)といびき(最大15dBほど)を分けられるか確かめるため(11月1日に追加。推定にはまだ使わない)
 // カチッは歯ぎしりの手がかり。10秒の録音で8回以上なら歯ぎしりの候補(4晩の録音で歯ぎしり8件中8件。大きな寝返り・起きた時も拾う)。
-// 解析ツールの clicks.py と同じ数え方(11月2日に追加。画面にはまだ出さない)
+// 解析ツールの clicks.py と同じ数え方(11月2日に追加)
 const THRESHOLDS = [4, 6, 8, 10, 15, 20];
 const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5, 15: 6, 20: 7 };
 // 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
@@ -251,6 +252,10 @@ const SNORE_SEC = 5, SNORE_MIN = 5;
 // (寝付けずに寝返りをしている間は物音が続くので、その分だけ後ろにずれる。じっと起きている時間は見分けられない)
 // 起きた時刻は「おはよう」を押した時刻のまま。
 const ONSET_SEC = 2, ONSET_MIN = 15;
+// 歯ぎしりの候補:1分の記録の「10秒の中で一番多かったカチッの数」が GRIND_CLICKS 以上の分。続いた分は1回と数える。
+// 起きた時の動きでもカチッが増えるので、最初と最後の GRIND_EDGE 分(おやすみ・おはようの操作)と、
+// 「目が覚めた」を押した時刻の前後 GRIND_TAP 分は数えない(11月3日に追加。カチッの列がある11月2日以降の記録だけ)
+const GRIND_CLICKS = 8, GRIND_EDGE = 3, GRIND_TAP = 2;
 
 // 録音:直近10秒のうち2秒以上「基準+6dB」を超えたら、その前3秒・後7秒を録音する。
 // (マイクの雑音で1秒だけ超えることがあるので、1秒だけでは録らない)
@@ -438,6 +443,24 @@ function snoreMinutes(ev) {
   return snore;
 }
 
+// 歯ぎしりの候補の時刻の一覧。カチッの列が無い記録は null
+function grindTimes(s) {
+  const rows = s.samples;
+  if (!rows.some((x) => x.length >= 10)) return null;
+  const taps = s.wakeTaps || [];
+  const times = [];
+  let prev = -2;
+  rows.forEach((x, i) => {
+    if (x.length < 10 || x[9] < GRIND_CLICKS) return;
+    if (i < GRIND_EDGE || i >= rows.length - GRIND_EDGE) return;
+    // その1分(x[0]から60秒)の前後 GRIND_TAP 分に「目が覚めた」を押していたら数えない
+    if (taps.some((t) => t >= x[0] - GRIND_TAP * 60000 && t <= x[0] + (1 + GRIND_TAP) * 60000)) return;
+    if (i !== prev + 1) times.push(x[0]);
+    prev = i;
+  });
+  return times;
+}
+
 function analyze(s) {
   const ev = s.samples.map(eventsOf);
   const snore = snoreMinutes(ev);
@@ -479,7 +502,7 @@ function analyze(s) {
   let wakes = 0;
   for (let i = 1; i < points.length; i++) if (points[i - 1].stage !== "awake" && points[i].stage === "awake") wakes++;
   return {
-    points, total, asleep, deep, wakes, onset, taps: s.wakeTaps || [],
+    points, total, asleep, deep, wakes, onset, taps: s.wakeTaps || [], grind: grindTimes(s),
     latency: Math.round((onset - s.start) / 60000),
     snore: Math.min(asleep, snore.filter(Boolean).length),
     deepRatio: asleep ? deep / asleep : 0,
@@ -674,12 +697,13 @@ function showDetail(id) {
       <div class="stat"><div class="k">深い眠りの割合</div><div class="v">${Math.round(a.deepRatio * 100)}%</div></div>
       <div class="stat"><div class="k">目覚めた回数</div><div class="v">${a.wakes}回</div></div>
       <div class="stat wide"><div class="k">いびき(物音が何分も続いた時間)</div><div class="v">${duration(a.snore)}</div></div>
+      ${a.grind ? `<div class="stat wide"><div class="k">歯ぎしりの候補(カチッという音が続いた回数)</div><div class="v">${a.grind.length}回${a.grind.length ? `<small>${a.grind.map(hm).join("、")}</small>` : ""}</div></div>` : ""}
     </div>
     <h2>眠りの深さ</h2>
     <div class="chart">${depthChart(a, s.start, s.end, false)}</div>
     <h2>物音の大きさ</h2>
     <div class="chart">${levelChart(a, s.start, s.end)}</div>
-    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。<br>※ グラフの下の<span style="color:var(--snore)">緑の線</span>は、いびきとみなした時間です(目覚めには数えず、浅い眠りにしています)。横で寝ている人のいびきも数えてしまいます。</p>
+    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。<br>※ グラフの下の<span style="color:var(--snore)">緑の線</span>は、いびきとみなした時間です(目覚めには数えず、浅い眠りにしています)。横で寝ている人のいびきも数えてしまいます。${a.grind ? "<br>※ 歯ぎしりの候補は、寝返りなど大きく動いた時の音も数えることがあります。" : ""}</p>
     <div id="clipSection"></div>
     <button class="delete" id="deleteBtn">この記録を削除</button>`;
   $("#backBtn").addEventListener("click", () => show("historyView"));
