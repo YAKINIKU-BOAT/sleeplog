@@ -239,6 +239,7 @@ const DEMO = new URLSearchParams(location.search).has("demo");
 // +15・+20dBは、目覚めの寝返り(録音で17〜33dB)といびき(最大15dBほど)を分けられるか確かめるため(11月1日に追加。推定にはまだ使わない)
 // カチッは歯ぎしりの手がかり。10秒の録音で8回以上なら歯ぎしりの候補(4晩の録音で歯ぎしり8件中8件。大きな寝返り・起きた時も拾う)。
 // 解析ツールの clicks.py と同じ数え方(11月2日に追加)
+//   さらに後ろに [いびきの10秒の数, 歯ぎしりの10秒の数, 30秒で見た繰り返しの強さ×100](11月4日〜。下の「一晩中の見分け」)
 const THRESHOLDS = [4, 6, 8, 10, 15, 20];
 const SAMPLE_COL = { 10: 2, 4: 3, 6: 4, 8: 5, 15: 6, 20: 7 };
 // 眠りの深さの推定に使う感度。古い記録は+10dBしか無いので、それを使う
@@ -252,7 +253,17 @@ const SNORE_SEC = 5, SNORE_MIN = 5;
 // (寝付けずに寝返りをしている間は物音が続くので、その分だけ後ろにずれる。じっと起きている時間は見分けられない)
 // 起きた時刻は「おはよう」を押した時刻のまま。
 const ONSET_SEC = 2, ONSET_MIN = 15;
-// 歯ぎしりの候補:1分の記録の「10秒の中で一番多かったカチッの数」が GRIND_CLICKS 以上の分。続いた分は1回と数える。
+// 一晩中の見分け(11月4日に追加):録音のある・なしに関係なく、直近10秒の音を5秒ごとに調べる。解析ツールの clipfeat.py と同じ計算。
+// いびきの10秒:繰り返し SNORE_REP 以上・山の長さ SNORE_LEN 秒以上・山の高さ SNORE_PK_MIN〜SNORE_PK_MAX dB
+//   (6晩の録音170件でいびき54件中28件が当たり、誤りは116件中2件。取りこぼしは5秒ごとに何度も調べることで補う)
+// 歯ぎしりの10秒:カチッ GRIND_CLICKS 回以上・山の高さ GRIND_PK dB 以下(咳や大きな動きを外す)
+// いびきの時間:いびきの10秒があった分を、SNORE_JOIN 分までの切れ目はつないで1つのかたまりにする。かたまりに SNORE_MIN_WINS 個以上あれば数える
+const SOUND_FRAME = 400, SOUND_WIN = 200, SOUND_HOP = 100, SOUND_LONG = 600;
+const SNORE_REP = 0.55, SNORE_LEN = 0.5, SNORE_PK_MIN = 6, SNORE_PK_MAX = 13, SNORE_JOIN = 2, SNORE_MIN_WINS = 2;
+const GRIND_PK = 20;
+// カチッが多いときは、物音の録音とは別に録音する(確かめる例を残すため)。録音の間隔は CLICK_CLIP_GAP
+const CLICK_CLIP_GAP = 2 * 60000;
+// 歯ぎしりの候補:1分の記録の「歯ぎしりの10秒」がある分(11月2〜3日の記録は「10秒の中で一番多かったカチッの数」が GRIND_CLICKS 以上の分)。続いた分は1回と数える。
 // 起きた時の動きでもカチッが増えるので、最初と最後の GRIND_EDGE 分(おやすみ・おはようの操作)と、
 // 「目が覚めた」を押した時刻の前後 GRIND_TAP 分は数えない(11月3日に追加。カチッの列がある11月2日以降の記録だけ)
 const GRIND_CLICKS = 8, GRIND_EDGE = 3, GRIND_TAP = 2;
@@ -451,7 +462,7 @@ function grindTimes(s) {
   const times = [];
   let prev = -2;
   rows.forEach((x, i) => {
-    if (x.length < 10 || x[9] < GRIND_CLICKS) return;
+    if (x.length < 10 || (x.length >= 13 ? x[11] < 1 : x[9] < GRIND_CLICKS)) return;
     if (i < GRIND_EDGE || i >= rows.length - GRIND_EDGE) return;
     // その1分(x[0]から60秒)の前後 GRIND_TAP 分に「目が覚めた」を押していたら数えない
     if (taps.some((t) => t >= x[0] - GRIND_TAP * 60000 && t <= x[0] + (1 + GRIND_TAP) * 60000)) return;
@@ -461,9 +472,30 @@ function grindTimes(s) {
   return times;
 }
 
+// 一晩中の見分けで、いびきとみなす分を true にする。列が無い記録は null
+function snoreFromWindows(s) {
+  const rows = s.samples;
+  if (!rows.some((x) => x.length >= 13)) return null;
+  const mask = rows.map(() => false);
+  let from = -1, last = -1, wins = 0;
+  const close = () => {
+    if (from >= 0 && wins >= SNORE_MIN_WINS) for (let k = from; k <= last; k++) mask[k] = true;
+  };
+  rows.forEach((x, i) => {
+    const w = x.length >= 13 ? x[10] : 0;
+    if (w < 1) return;
+    if (from < 0 || i - last > SNORE_JOIN + 1) { close(); from = i; wins = 0; }
+    last = i;
+    wins += w;
+  });
+  close();
+  return mask;
+}
+
 function analyze(s) {
   const ev = s.samples.map(eventsOf);
-  const snore = snoreMinutes(ev);
+  const heard = snoreFromWindows(s);
+  const snore = snoreMinutes(ev).map((v, i) => v || (heard ? heard[i] : false));
   // いびきの分の物音は、まわりの分の目覚め・深さの判定にも入れない
   const ev2 = ev.map((e, i) => (snore[i] ? 0 : e));
   // 前後 r 分の物音の秒数の合計
@@ -487,7 +519,7 @@ function analyze(s) {
     const stage = snore[i] ? "light" : near[i] >= awakeCut ? "awake" : wide[i] <= deepCut ? "deep" : "light";
     // グラフの高さ:深い=0.1、浅い=0.3〜0.8(物音が多いほど高く。いびきの分は0.5)、目覚め=1
     const depth = snore[i] ? 0.5 : stage === "awake" ? 1 : stage === "deep" ? 0.1 : 0.3 + 0.5 * Math.min(1, near[i] / awakeCut);
-    return { t: x[0], depth, stage, snore: snore[i], level: x[1] };
+    return { t: x[0], depth, stage, snore: heard ? heard[i] : snore[i], level: x[1] };
   });
   const total = Math.max(1, Math.round((s.end - s.start) / 60000));
   // 最後の1分は半端なことがあるので、記録した時間を超えないようにする
@@ -504,7 +536,9 @@ function analyze(s) {
   return {
     points, total, asleep, deep, wakes, onset, taps: s.wakeTaps || [], grind: grindTimes(s),
     latency: Math.round((onset - s.start) / 60000),
-    snore: Math.min(asleep, snore.filter(Boolean).length),
+    snore: heard ? heard.filter(Boolean).length : Math.min(asleep, snore.filter(Boolean).length),
+    snoreHeard: !!heard,
+    tapEra: s.samples.some((x) => x.length >= 10),
     deepRatio: asleep ? deep / asleep : 0,
   };
 }
@@ -679,6 +713,17 @@ function renderList() {
   });
 }
 
+// いびきとみなした時間のかたまりを「2:15〜2:51」の形で並べる
+function snoreSpans(a) {
+  const spans = [];
+  a.points.forEach((p, i) => {
+    if (!p.snore) return;
+    if (i && a.points[i - 1].snore) spans[spans.length - 1][1] = p.t;
+    else spans.push([p.t, p.t]);
+  });
+  return spans.map(([from, to]) => hm(from) + "〜" + hm(to + 60000));
+}
+
 function showDetail(id) {
   const s = sessions.find((x) => x.id === id);
   if (!s) return;
@@ -695,15 +740,15 @@ function showDetail(id) {
       <div class="stat"><div class="k">寝付いた時刻</div><div class="v">${hm(a.onset)}</div></div>
       <div class="stat"><div class="k">寝付くまで</div><div class="v">${a.latency}分</div></div>
       <div class="stat"><div class="k">深い眠りの割合</div><div class="v">${Math.round(a.deepRatio * 100)}%</div></div>
-      <div class="stat"><div class="k">目覚めた回数</div><div class="v">${a.wakes}回</div></div>
-      <div class="stat wide"><div class="k">いびき(物音が何分も続いた時間)</div><div class="v">${duration(a.snore)}</div></div>
+      <div class="stat"><div class="k">${a.tapEra ? "目が覚めた回数(ボタン)" : "目覚めた回数"}</div><div class="v">${a.tapEra ? a.taps.length : a.wakes}回</div></div>
+      <div class="stat wide"><div class="k">${a.snoreHeard ? "いびき(呼吸のリズムから判定した時間)" : "いびき(物音が何分も続いた時間)"}</div><div class="v">${duration(a.snore)}${a.snoreHeard && a.snore ? `<small>${snoreSpans(a).join("、")}</small>` : ""}</div></div>
       ${a.grind ? `<div class="stat wide"><div class="k">歯ぎしりの候補(カチッという音が続いた回数)</div><div class="v">${a.grind.length}回${a.grind.length ? `<small>${a.grind.map(hm).join("、")}</small>` : ""}</div></div>` : ""}
     </div>
     <h2>眠りの深さ</h2>
     <div class="chart">${depthChart(a, s.start, s.end, false)}</div>
     <h2>物音の大きさ</h2>
     <div class="chart">${levelChart(a, s.start, s.end)}</div>
-    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。<br>※ グラフの下の<span style="color:var(--snore)">緑の線</span>は、いびきとみなした時間です(目覚めには数えず、浅い眠りにしています)。横で寝ている人のいびきも数えてしまいます。${a.grind ? "<br>※ 歯ぎしりの候補は、寝返りなど大きく動いた時の音も数えることがあります。" : ""}</p>
+    <p class="note">※ 物音の多さから推定した目安です。医療用の検査ではありません。<br>※ グラフの下の<span style="color:var(--snore)">緑の線</span>は、いびきとみなした時間です(目覚めには数えず、浅い眠りにしています)。横で寝ている人のいびきも数えてしまいます。${a.tapEra ? "<br>※ 目が覚めた回数は「目が覚めた」ボタンを押した回数です。グラフの目覚めは物音からの推定で、合わないことがあります。" : ""}${a.grind ? "<br>※ 歯ぎしりの候補は、寝返りなど大きく動いた時の音も数えることがあります。" : ""}</p>
     <div id="clipSection"></div>
     <button class="delete" id="deleteBtn">この記録を削除</button>`;
   $("#backBtn").addEventListener("click", () => show("historyView"));
@@ -1055,8 +1100,8 @@ function pushMinute() {
   THRESHOLDS.forEach((d, k) => { row[SAMPLE_COL[d]] = m.events[k]; });
   const c = rec.clipper;
   if (c) {
-    row.push(c.clickN, c.clickMax);
-    c.clickN = 0; c.clickMax = 0;
+    row.push(c.clickN, c.clickMax, c.snoreWin, c.grindWin, Math.round(c.longRep * 100));
+    c.clickN = 0; c.clickMax = 0; c.snoreWin = 0; c.grindWin = 0; c.longRep = 0;
   }
   rec.samples.push(row);
   // ページが閉じても残るよう、1分ごとに途中保存
@@ -1089,7 +1134,7 @@ function startClipper(ctx, source, record) {
     const c = {
       node, mute, ring: new Float32Array(CLIP_RATE * CLIP_PRE), pos: 0, filled: 0,
       cur: null, count: 0, saved: 0, failed: 0, last: -Infinity, hits: [], record,
-      clickN: 0, clickMax: 0,
+      clickN: 0, clickMax: 0, snoreWin: 0, grindWin: 0, longRep: 0, clickLast: -Infinity,
     };
     const ratio = ctx.sampleRate / CLIP_RATE;
     let acc = 0, accN = 0, step = 0;
@@ -1113,13 +1158,32 @@ function startClipper(ctx, source, record) {
           while (n - clickTimes[0] > CLICK_WIN) clickTimes.shift();
           c.clickN++;
           c.clickMax = Math.max(c.clickMax, clickTimes.length);
+          if (clickTimes.length >= GRIND_CLICKS) clickClip();
         }
         blocks.shift();
       }
       blocks.push(e);
     };
+    // 直近の音の大きさ(0.05秒ごと)を持っておき、5秒ごとにいびき・歯ぎしりの10秒かどうかを調べる
+    const env = [];
+    let frameSum = 0, frameN = 0, frames = 0;
+    const listen = (v) => {
+      frameSum += v * v; frameN++;
+      if (frameN < SOUND_FRAME) return;
+      env.push(10 * Math.log10(frameSum / SOUND_FRAME + 1e-14));
+      frameSum = 0; frameN = 0; frames++;
+      if (env.length > SOUND_LONG) env.shift();
+      if (frames % SOUND_HOP) return;
+      if (env.length >= SOUND_WIN) {
+        const f = soundFeat(env.slice(-SOUND_WIN));
+        if (f.rep >= SNORE_REP && f.blen >= SNORE_LEN && f.pk >= SNORE_PK_MIN && f.pk <= SNORE_PK_MAX) c.snoreWin++;
+        if (clickTimes.length >= GRIND_CLICKS && n - clickTimes[clickTimes.length - 1] <= CLICK_WIN && f.pk <= GRIND_PK) c.grindWin++;
+      }
+      if (env.length >= SOUND_LONG && frames % (SOUND_HOP * 2) === 0) c.longRep = Math.max(c.longRep, soundFeat(env).rep);
+    };
     const push = (v) => {
       try { countClick(v); } catch {}
+      try { listen(v); } catch {}
       c.ring[c.pos] = v;
       c.pos = (c.pos + 1) % c.ring.length;
       c.filled = Math.min(c.ring.length, c.filled + 1);
@@ -1141,6 +1205,49 @@ function startClipper(ctx, source, record) {
   } catch {
     rec.clipper = null;
   }
+}
+
+// 音の大きさの並び(0.05秒ごとのdB)から、山の高さ・山の長さ・繰り返しの強さを出す(clipfeat.py と同じ計算)
+function soundFeat(db) {
+  const FR = 0.05, m = db.length;
+  const srt = [...db].sort((a, b) => a - b);
+  const floor = srt[Math.floor(m / 5)], pk = srt[m - 3] - floor;
+  const thr = floor + pk * 0.5;
+  // 大きな音の山。近すぎる山(0.4秒以内)はひとつにまとめる
+  const merged = [];
+  for (let i = 0; i < m; ) {
+    if (db[i] <= thr) { i++; continue; }
+    let j = i;
+    while (j < m && db[j] > thr) j++;
+    const st = i * FR, ln = (j - i) * FR, prev = merged[merged.length - 1];
+    if (prev && st - (prev[0] + prev[1]) < 0.4) prev[1] = st + ln - prev[0];
+    else merged.push([st, ln]);
+    i = j;
+  }
+  const blen = merged.reduce((a, b) => a + b[1], 0) / Math.max(1, merged.length);
+  // 繰り返しの強さ:音の大きさの波を2〜7秒ずらして、どれだけ重なるか
+  const mean = db.reduce((a, b) => a + b, 0) / m;
+  const e = db.map((v) => v - mean);
+  const den = e.reduce((a, b) => a + b * b, 0) || 1;
+  let rep = -1;
+  for (let lag = Math.floor(2 / FR); lag <= Math.min(Math.floor(7 / FR), m - 20); lag++) {
+    let sum = 0;
+    for (let k = 0; k < m - lag; k++) sum += e[k] * e[k + lag];
+    rep = Math.max(rep, sum / den * m / (m - lag));
+  }
+  return { pk, blen, rep };
+}
+
+// カチッが多いときの録音。物音のきっかけの5分あける決まりとは別に、CLICK_CLIP_GAP ごとに録る
+function clickClip() {
+  const c = rec.clipper, now = Date.now();
+  if (!c || !c.record || c.cur || c.count >= CLIP_MAX) return;
+  if (now - rec.start < CLIP_SKIP || now - c.clickLast < CLICK_CLIP_GAP || c.filled < c.ring.length) return;
+  const buf = new Float32Array(CLIP_RATE * (CLIP_PRE + CLIP_POST));
+  for (let k = 0; k < c.ring.length; k++) buf[k] = c.ring[(c.pos + k) % c.ring.length];
+  c.cur = { t: now - CLIP_PRE * 1000, rise: 0, buf, n: c.ring.length };
+  c.clickLast = now;
+  c.count++;
 }
 
 function maybeClip(now, rise) {
