@@ -91,7 +91,10 @@
   .item .row { display: flex; justify-content: space-between; align-items: baseline; }
   .item .title { font-weight: 700; }
   .item .dur { font-weight: 700; font-variant-numeric: tabular-nums; }
-  .item .range { color: var(--sub); font-size: 13px; margin: 2px 0 8px; }
+  .item .range { color: var(--sub); font-size: 13px; margin: 2px 0 4px; }
+  .item .counts { color: var(--sub); font-size: 13px; margin: 0 0 8px; font-variant-numeric: tabular-nums; }
+  .item .counts b { color: var(--text); font-weight: 700; }
+  .item .counts span { margin: 0 6px; }
   .empty { text-align: center; color: var(--sub); padding: 60px 0; line-height: 1.8; }
   .sub-btn { background: var(--card); border-radius: 12px; padding: 14px; width: 100%; margin-bottom: 8px; text-align: left; }
 
@@ -707,10 +710,19 @@ function renderList() {
     const el = document.createElement("button");
     el.className = "item";
     el.innerHTML = `<div class="row"><span class="title">${nightTitle(s.start)}${moodFace(s.note) ? `<span class="face">${moodFace(s.note)}</span>` : ""}</span><span class="dur">${duration(a.asleep)}</span></div>
-      <div class="range">${hm(s.start)}〜${hm(s.end)}</div>${depthChart(a, s.start, s.end, true)}`;
+      <div class="range">${hm(s.start)}〜${hm(s.end)}</div>${soundCounts(a)}${depthChart(a, s.start, s.end, true)}`;
     el.addEventListener("click", () => showDetail(s.id));
     list.appendChild(el);
   });
+}
+
+// 一覧に出す「いびき ○回(計○分)・歯ぎしり ○回」。いびきの回数は、いびきとみなした時間のかたまりの数。
+// 歯ぎしりはカチッの列がある11月2日以降の記録だけ
+function soundCounts(a) {
+  const n = snoreSpans(a).length;
+  const parts = [`いびき <b>${n}回</b>${n ? `(計${duration(a.snore)})` : ""}`];
+  if (a.grind) parts.push(`歯ぎしり <b>${a.grind.length}回</b>`);
+  return `<div class="counts">${parts.join("<span>・</span>")}</div>`;
 }
 
 // いびきとみなした時間のかたまりを「2:15〜2:51」の形で並べる
@@ -1486,8 +1498,15 @@ function makeDemo() {
       if (m % 137 === 0) ev += 10;
       const e = Math.floor(ev);
       // [時刻, 音の大きさ, +10dB, +4dB, +6dB, +8dB]
-      samples.push([start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10,
-        Math.floor(e / 2), e + 2, e, Math.floor(e * 0.7)]);
+      // 2日前・3日前の夜は、いびき・歯ぎしりの列(11月4日〜の形)も付ける
+      const row = [start + m * 60000, Math.round((-60 + ev * 2 + Math.random() * 4 - 2) * 10) / 10,
+        Math.floor(e / 2), e + 2, e, Math.floor(e * 0.7)];
+      if (k >= 2) {
+        const snoring = (m >= 120 && m < 150) || (m >= 260 && m < 275) || (k === 3 && m >= 330 && m < 340);
+        const grinding = m === 90 || m === 91 || m === 200 || (k === 2 && m === 310);
+        row.push(0, 0, 3, grinding ? 9 : 2, snoring ? 4 : 0, grinding ? 2 : 0, 30);
+      }
+      samples.push(row);
     }
     const note = k === 1 ? { tags: ["運動", "加湿器"] }
       : { tags: k === 2 ? ["カフェイン(夕方以降)", "加湿器"] : ["湯船につかった", "加湿器", "横に人"], mood: k === 2 ? 2 : 4, woke: k === 2 ? "yes" : "no", ...(k === 2 ? { wokeAt: "3時ごろ" } : {}) };
