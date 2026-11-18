@@ -116,6 +116,10 @@
   .clip .row span { color: var(--sub); }
   .clip .share { background: none; color: var(--accent); font-size: 13px; padding: 4px 0 4px 12px; }
   .clip audio { display: block; width: 100%; height: 36px; }
+  .kind { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px; margin-left: 6px; border: 1px solid currentColor; }
+  .kind.snore { color: var(--snore); }
+  .kind.grind { color: var(--awake); }
+  .kind.other { color: var(--sub); }
 
   /* 朝のひとこと・要因タグ */
   .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 16px; }
@@ -824,15 +828,21 @@ async function renderClips(sessionId) {
   try { clips = await clipsOf(sessionId); } catch { return; }
   const box = $("#clipSection");
   if (!box || !clips.length) return;
+  const kinds = clips.map((c) => { try { return clipKind(c); } catch { return []; } });
+  const cnt = (k) => kinds.filter((x) => x.includes(k)).length;
   box.innerHTML = `<h2>録音(${clips.length}件)</h2>
-    <p class="note" style="margin-top:0">大きな物音がしたときの前後10秒です。小さな音も聞こえるよう、音量を上げて保存しています。録音は${CLIP_KEEP_DAYS}日たつと自動で消えます。</p>`;
-  clips.forEach((c) => {
+    <p class="note" style="margin-top:0">いびき ${cnt("いびき")}件・歯ぎしり ${cnt("歯ぎしり")}件・その他 ${kinds.filter((x) => !x.length).length}件<br>大きな物音がしたときの前後10秒です。小さな音も聞こえるよう、音量を上げて保存しています。録音は${CLIP_KEEP_DAYS}日たつと自動で消えます。<br>※ 見分けは録音1件ずつの音の形からの目安です。小さいいびき・短いいびきは「その他」に入ることが多く、大きな寝返りや起きた時の音が「歯ぎしり」に入ることがあります。</p>`;
+  clips.forEach((c, i) => {
+    const kind = kinds[i];
+    const tags = kind.length
+      ? kind.map((k) => `<span class="kind ${k === "いびき" ? "snore" : "grind"}">${k}</span>`).join("")
+      : `<span class="kind other">その他</span>`;
     const file = new File([c.wav], `SleepLog_${c.id}.wav`, { type: "audio/wav" });
     const url = URL.createObjectURL(file);
     clipUrls.push(url);
     const el = document.createElement("div");
     el.className = "clip";
-    el.innerHTML = `<div class="row"><div><b>${hm(c.t + CLIP_PRE * 1000)}</b> <span>物音 +${c.rise}dB</span></div><button class="share">送る</button></div>
+    el.innerHTML = `<div class="row"><div><b>${hm(c.t + CLIP_PRE * 1000)}</b>${tags}</div><button class="share">送る</button></div>
       <audio controls preload="none" src="${url}"></audio>`;
     el.querySelector(".share").addEventListener("click", async () => {
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -852,6 +862,47 @@ async function renderClips(sessionId) {
   btn.addEventListener("click", () => exportNight(sessionId, clips));
   box.appendChild(btn);
   box.insertAdjacentHTML("beforeend", `<p class="note" style="margin-top:0">録音つきで解析してもらうとき用です(約${Math.max(1, Math.round(clips.reduce((n, c) => n + c.wav.byteLength, 0) * 1.37 / 1e6))}MB)。録音は${CLIP_KEEP_DAYS}日で消えるので、それまでに書き出してください。</p>`);
+}
+
+// 録音1件(10秒)が、いびき・歯ぎしりのどれに当たるか(11月18日に追加)。どちらでもなければ空(画面では「その他」)。
+// 一晩中の見分けと同じ基準を、録音そのものに当てる(基準は解析ツールの clipfeat.py・clicks.py で録音から作ったもの)。
+// 7日以内の録音なら、この機能より前に録ったものにも付く。
+// 試算(10/29〜11/4の録音165件、聞き取りつき):いびきは55件中28件が当たり・誤り1件(寝言)。
+// 歯ぎしり(カチッを数えていた11/1以降)は15件中7件が当たり・誤り2件(大きな寝返り、起きた時)。取りこぼしの多くは本人も「?」を付けたもの。
+// 加湿器・寝返り・外の音は数字で区別できていないので「その他」にまとめる。
+function clipKind(c) {
+  const v = new DataView(c.wav), n = Math.floor((c.wav.byteLength - 44) / 2);
+  const x = new Float32Array(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) { x[i] = v.getInt16(44 + i * 2, true); mean += x[i]; }
+  mean /= n;
+  for (let i = 0; i < n; i++) x[i] -= mean;
+  // 0.05秒ごとの音の大きさ
+  const step = CLIP_RATE * 0.05, db = [];
+  for (let i = 0; i + step <= n; i += step) {
+    let sq = 0;
+    for (let k = i; k < i + step; k++) sq += x[k] * x[k];
+    db.push(10 * Math.log10(Math.max(sq / step, 1e-6)));
+  }
+  if (db.length < 40) return [];
+  const f = soundFeat(db);
+  // カチッ(clicks.py と同じ数え方)
+  let clicks = 0, last = -Infinity;
+  const e = [];
+  for (let i = 1; i + CLICK_STEP <= n; i += CLICK_STEP) {
+    let sq = 0;
+    for (let k = i; k < i + CLICK_STEP; k++) { const h = x[k] - x[k - 1]; sq += h * h; }
+    e.push(10 * Math.log10(sq / CLICK_STEP + 1e-9));
+  }
+  for (let k = CLICK_PREV; k < e.length; k++) {
+    const prev = e.slice(k - CLICK_PREV, k).sort((a, b) => a - b)[CLICK_PREV / 2];
+    if (e[k] - prev >= CLICK_DB && k - last > CLICK_REST) { clicks++; last = k; }
+  }
+  const out = [];
+  if (f.rep >= SNORE_REP && f.blen >= SNORE_LEN && f.pk >= SNORE_PK_MIN && f.pk <= SNORE_PK_MAX) out.push("いびき");
+  // カチッが多くて録った録音(rise=0)は、録る前の10秒にカチッが8回以上あったので、録音内の数が少なくても歯ぎしりに数える
+  if ((clicks >= GRIND_CLICKS || c.rise === 0) && f.pk <= GRIND_PK) out.push("歯ぎしり");
+  return out;
 }
 
 // 1晩分の記録と録音を、1つのファイルにまとめて書き出す(録音はbase64の文字にして入れる)。
